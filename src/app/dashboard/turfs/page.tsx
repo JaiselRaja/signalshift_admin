@@ -1,63 +1,48 @@
 "use client";
 
-import { useState, useEffect, useCallback, FormEvent } from "react";
+import { useState, useEffect, FormEvent } from "react";
+import { listTurfs, createTurf, updateTurf, ApiError, TurfRead } from "@/lib/api";
 
-interface Turf {
-  id: string;
-  name: string;
-  slug: string;
-  city: string;
-  address: string;
-  sportTypes: string[];
-  lat: number | null;
-  lng: number | null;
-  isActive: boolean;
-  createdAt: string;
-}
-
-const STORAGE_KEY = "signal_shift_turfs";
-
-const INITIAL_FORM: Omit<Turf, "id" | "isActive" | "createdAt" | "sportTypes" | "lat" | "lng"> & {
-  sportTypes: string;
-  lat: string;
-  lng: string;
-} = {
+const INITIAL_FORM = {
   name: "",
   slug: "",
   city: "",
   address: "",
   sportTypes: "",
-  lat: "",
-  lng: "",
 };
 
 export default function TurfsPage() {
-  const [turfs, setTurfs] = useState<Turf[]>([]);
-  const [loaded, setLoaded] = useState(false);
+  const [turfs, setTurfs] = useState<TurfRead[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(INITIAL_FORM);
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [slugTouched, setSlugTouched] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
 
-  // Load turfs from localStorage on mount
+  // Fetch turfs on mount
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        setTurfs(JSON.parse(stored));
-      }
-    } catch {
-      // Ignore corrupt data
-    }
-    setLoaded(true);
+    fetchTurfs();
   }, []);
 
-  // Persist turfs to localStorage whenever they change
-  useEffect(() => {
-    if (loaded) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(turfs));
+  async function fetchTurfs() {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await listTurfs();
+      setTurfs(data);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setError(`Failed to load turfs: ${err.message}`);
+      } else {
+        setError("Failed to load turfs. Please try again.");
+      }
+    } finally {
+      setLoading(false);
     }
-  }, [turfs, loaded]);
+  }
 
   function generateSlug(value: string) {
     return value
@@ -67,7 +52,6 @@ export default function TurfsPage() {
       .replace(/-+/g, "-");
   }
 
-  // Auto-generate slug from name only if user hasn't manually edited slug
   function handleNameChange(value: string) {
     setForm((prev) => ({
       ...prev,
@@ -78,9 +62,8 @@ export default function TurfsPage() {
 
   function handleChange(field: string, value: string) {
     setForm((prev) => ({ ...prev, [field]: value }));
-    // Clear error when user types
-    if (errors[field]) {
-      setErrors((prev) => {
+    if (formErrors[field]) {
+      setFormErrors((prev) => {
         const next = { ...prev };
         delete next[field];
         return next;
@@ -95,51 +78,78 @@ export default function TurfsPage() {
     else if (!/^[a-z0-9-]+$/.test(form.slug))
       newErrors.slug = "Only lowercase letters, numbers, and hyphens";
     if (!form.city.trim()) newErrors.city = "City is required";
-    if (turfs.some((t) => t.slug === form.slug))
-      newErrors.slug = "A turf with this slug already exists";
-    if (form.lat && isNaN(parseFloat(form.lat)))
-      newErrors.lat = "Must be a valid number";
-    if (form.lng && isNaN(parseFloat(form.lng)))
-      newErrors.lng = "Must be a valid number";
-    setErrors(newErrors);
+    setFormErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   }
 
-  function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!validate()) return;
 
-    const newTurf: Turf = {
-      id: crypto.randomUUID(),
-      name: form.name.trim(),
-      slug: form.slug.trim(),
-      city: form.city.trim(),
-      address: form.address.trim(),
-      sportTypes: form.sportTypes
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
-      lat: form.lat ? parseFloat(form.lat) : null,
-      lng: form.lng ? parseFloat(form.lng) : null,
-      isActive: true,
-      createdAt: new Date().toISOString().split("T")[0],
-    };
-
-    setTurfs((prev) => [newTurf, ...prev]);
-    setForm(INITIAL_FORM);
-    setErrors({});
-    setSlugTouched(false);
-    setShowForm(false);
+    setSubmitting(true);
+    try {
+      const newTurf = await createTurf({
+        name: form.name.trim(),
+        slug: form.slug.trim(),
+        city: form.city.trim(),
+        address: form.address.trim() || null,
+        sport_types: form.sportTypes
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+      });
+      setTurfs((prev) => [newTurf, ...prev]);
+      setForm(INITIAL_FORM);
+      setFormErrors({});
+      setSlugTouched(false);
+      setShowForm(false);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setFormErrors({ _form: err.message });
+      } else {
+        setFormErrors({ _form: "Failed to create turf. Please try again." });
+      }
+    } finally {
+      setSubmitting(false);
+    }
   }
 
-  function toggleActive(id: string) {
-    setTurfs((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, isActive: !t.isActive } : t))
+  async function toggleActive(turf: TurfRead) {
+    setTogglingId(turf.id);
+    try {
+      const updated = await updateTurf(turf.id, { is_active: !turf.is_active });
+      setTurfs((prev) =>
+        prev.map((t) => (t.id === updated.id ? updated : t))
+      );
+    } catch (err) {
+      const msg =
+        err instanceof ApiError
+          ? err.message
+          : "Failed to update turf status.";
+      setError(msg);
+    } finally {
+      setTogglingId(null);
+    }
+  }
+
+  // Loading state
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-white">All Turfs</h2>
+            <p className="text-sm text-slate-500">
+              Manage your facilities, slot rules, and overrides
+            </p>
+          </div>
+        </div>
+        <div className="glass-card flex flex-col items-center justify-center py-20 text-center">
+          <div className="mb-4 h-8 w-8 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
+          <p className="text-sm text-slate-400">Loading turfs...</p>
+        </div>
+      </div>
     );
-  }
-
-  function deleteTurf(id: string) {
-    setTurfs((prev) => prev.filter((t) => t.id !== id));
   }
 
   return (
@@ -157,7 +167,7 @@ export default function TurfsPage() {
             setShowForm(!showForm);
             if (showForm) {
               setForm(INITIAL_FORM);
-              setErrors({});
+              setFormErrors({});
               setSlugTouched(false);
             }
           }}
@@ -174,21 +184,46 @@ export default function TurfsPage() {
               <line x1="5" y1="12" x2="19" y2="12" />
             </svg>
           )}
-          {showForm ? "Cancel" : "Add Turf"}
+          {showForm ? "Cancel" : "Create Turf"}
         </button>
       </div>
+
+      {/* Error Banner */}
+      {error && (
+        <div className="glass-card flex items-center gap-3 border-rose-500/20 bg-rose-500/[0.05] p-4">
+          <svg className="h-5 w-5 shrink-0 text-rose-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="15" y1="9" x2="9" y2="15" />
+            <line x1="9" y1="9" x2="15" y2="15" />
+          </svg>
+          <p className="text-sm text-rose-300">{error}</p>
+          <button
+            onClick={() => setError(null)}
+            className="ml-auto text-xs text-slate-400 hover:text-white"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Create Form */}
       {showForm && (
         <form onSubmit={handleSubmit} className="glass-card animate-fade-in p-6">
           <h3 className="mb-4 text-sm font-semibold text-white">Create New Turf</h3>
+
+          {formErrors._form && (
+            <div className="mb-4 rounded-lg border border-rose-500/20 bg-rose-500/[0.05] px-4 py-3 text-sm text-rose-300">
+              {formErrors._form}
+            </div>
+          )}
+
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
             <InputField
               label="Name"
               placeholder="e.g. Neptune Arena"
               value={form.name}
               onChange={(v) => handleNameChange(v)}
-              error={errors.name}
+              error={formErrors.name}
               required
             />
             <InputField
@@ -199,7 +234,7 @@ export default function TurfsPage() {
                 setSlugTouched(true);
                 handleChange("slug", v);
               }}
-              error={errors.slug}
+              error={formErrors.slug}
               required
             />
             <InputField
@@ -207,7 +242,7 @@ export default function TurfsPage() {
               placeholder="e.g. Mumbai"
               value={form.city}
               onChange={(v) => handleChange("city", v)}
-              error={errors.city}
+              error={formErrors.city}
               required
             />
             <InputField
@@ -223,36 +258,21 @@ export default function TurfsPage() {
               onChange={(v) => handleChange("sportTypes", v)}
               hint="Comma-separated"
             />
-            <InputField
-              label="Latitude"
-              placeholder="19.0760"
-              type="number"
-              value={form.lat}
-              onChange={(v) => handleChange("lat", v)}
-              error={errors.lat}
-            />
-            <InputField
-              label="Longitude"
-              placeholder="72.8777"
-              type="number"
-              value={form.lng}
-              onChange={(v) => handleChange("lng", v)}
-              error={errors.lng}
-            />
           </div>
           <div className="mt-5 flex gap-3">
             <button
               type="submit"
-              className="rounded-lg bg-indigo-500 px-5 py-2.5 text-sm font-medium text-white transition-all hover:bg-indigo-600 hover:shadow-lg hover:shadow-indigo-500/25 active:scale-[0.98]"
+              disabled={submitting}
+              className="rounded-lg bg-indigo-500 px-5 py-2.5 text-sm font-medium text-white transition-all hover:bg-indigo-600 hover:shadow-lg hover:shadow-indigo-500/25 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Create Turf
+              {submitting ? "Creating..." : "Create Turf"}
             </button>
             <button
               type="button"
               onClick={() => {
                 setShowForm(false);
                 setForm(INITIAL_FORM);
-                setErrors({});
+                setFormErrors({});
                 setSlugTouched(false);
               }}
               className="rounded-lg bg-white/[0.06] px-5 py-2.5 text-sm font-medium text-slate-300 transition-colors hover:bg-white/[0.1]"
@@ -302,7 +322,7 @@ export default function TurfsPage() {
               {/* Color bar */}
               <div
                 className={`h-1 w-full ${
-                  turf.isActive
+                  turf.is_active
                     ? "bg-gradient-to-r from-emerald-500 to-teal-500"
                     : "bg-slate-700"
                 }`}
@@ -314,31 +334,31 @@ export default function TurfsPage() {
                       {turf.name}
                     </h3>
                     <p className="mt-0.5 truncate text-xs text-slate-500">
-                      {turf.city} · {turf.slug}
+                      {turf.city || "No city"} · {turf.slug}
                     </p>
                   </div>
                   <span
                     className={`ml-2 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                      turf.isActive
+                      turf.is_active
                         ? "bg-emerald-500/10 text-emerald-400"
                         : "bg-slate-500/10 text-slate-400"
                     }`}
                   >
-                    {turf.isActive ? "Active" : "Inactive"}
+                    {turf.is_active ? "Active" : "Inactive"}
                   </span>
                 </div>
 
                 {/* Address */}
                 {turf.address && (
                   <p className="mt-2 truncate text-xs text-slate-500">
-                    📍 {turf.address}
+                    {turf.address}
                   </p>
                 )}
 
                 {/* Sport Tags */}
-                {turf.sportTypes.length > 0 && (
+                {turf.sport_types.length > 0 && (
                   <div className="mt-3 flex flex-wrap gap-1.5">
-                    {turf.sportTypes.map((sport) => (
+                    {turf.sport_types.map((sport) => (
                       <span
                         key={sport}
                         className="rounded-md bg-indigo-500/10 px-2 py-0.5 text-[11px] font-medium text-indigo-400"
@@ -352,16 +372,19 @@ export default function TurfsPage() {
                 {/* Footer */}
                 <div className="mt-4 flex items-center justify-between border-t border-white/[0.04] pt-3">
                   <span className="text-xs text-slate-500">
-                    Added {turf.createdAt}
+                    Added {turf.created_at.split("T")[0]}
                   </span>
                   <div className="flex gap-1">
                     {/* Toggle Active */}
                     <button
-                      onClick={() => toggleActive(turf.id)}
-                      className="rounded-md bg-white/[0.04] p-1.5 text-slate-400 transition-colors hover:bg-white/[0.08] hover:text-white"
-                      title={turf.isActive ? "Deactivate" : "Activate"}
+                      onClick={() => toggleActive(turf)}
+                      disabled={togglingId === turf.id}
+                      className="rounded-md bg-white/[0.04] p-1.5 text-slate-400 transition-colors hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      title={turf.is_active ? "Deactivate" : "Activate"}
                     >
-                      {turf.isActive ? (
+                      {togglingId === turf.id ? (
+                        <div className="h-3.5 w-3.5 animate-spin rounded-full border border-slate-400 border-t-transparent" />
+                      ) : turf.is_active ? (
                         <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                           <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
                           <circle cx="12" cy="12" r="3" />
@@ -372,19 +395,6 @@ export default function TurfsPage() {
                           <line x1="1" y1="1" x2="23" y2="23" />
                         </svg>
                       )}
-                    </button>
-                    {/* Delete */}
-                    <button
-                      onClick={() => deleteTurf(turf.id)}
-                      className="rounded-md bg-white/[0.04] p-1.5 text-slate-400 transition-colors hover:bg-rose-500/10 hover:text-rose-400"
-                      title="Delete"
-                    >
-                      <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <polyline points="3 6 5 6 21 6" />
-                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                        <line x1="10" y1="11" x2="10" y2="17" />
-                        <line x1="14" y1="11" x2="14" y2="17" />
-                      </svg>
                     </button>
                   </div>
                 </div>

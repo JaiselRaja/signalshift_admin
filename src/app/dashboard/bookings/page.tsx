@@ -1,202 +1,361 @@
 "use client";
 
-import { useState, useEffect } from "react";
-
-interface Booking {
-  id: string;
-  user: string;
-  email: string;
-  turf: string;
-  date: string;
-  start: string;
-  end: string;
-  status: string;
-  type: string;
-  amount: number;
-  createdAt: string;
-}
-
-const STORAGE_KEY = "signal_shift_bookings";
-
-const DEFAULT_BOOKINGS: Booking[] = [
-  { id: "BK-2401", user: "Rahul Sharma", email: "rahul@email.com", turf: "Neptune Arena", date: "2026-04-11", start: "18:00", end: "19:00", status: "confirmed", type: "regular", amount: 1200, createdAt: "2 hours ago" },
-  { id: "BK-2400", user: "Priya Patel", email: "priya@email.com", turf: "Thunderbolt Ground", date: "2026-04-11", start: "19:00", end: "20:00", status: "pending", type: "regular", amount: 1500, createdAt: "3 hours ago" },
-  { id: "BK-2399", user: "Arjun Mehta", email: "arjun@email.com", turf: "Neptune Arena", date: "2026-04-12", start: "17:00", end: "18:00", status: "confirmed", type: "tournament", amount: 1200, createdAt: "5 hours ago" },
-  { id: "BK-2398", user: "Sneha Gupta", email: "sneha@email.com", turf: "Solar Field", date: "2026-04-12", start: "20:00", end: "21:00", status: "confirmed", type: "regular", amount: 1800, createdAt: "6 hours ago" },
-  { id: "BK-2397", user: "Vikram Singh", email: "vikram@email.com", turf: "Thunderbolt Ground", date: "2026-04-13", start: "18:00", end: "19:00", status: "cancelled", type: "regular", amount: 1500, createdAt: "1 day ago" },
-  { id: "BK-2396", user: "Ananya Roy", email: "ananya@email.com", turf: "Neptune Arena", date: "2026-04-13", start: "19:00", end: "20:00", status: "completed", type: "practice", amount: 1000, createdAt: "1 day ago" },
-  { id: "BK-2395", user: "Karan Joshi", email: "karan@email.com", turf: "Orbit Turf", date: "2026-04-10", start: "16:00", end: "17:30", status: "no_show", type: "regular", amount: 2100, createdAt: "2 days ago" },
-];
+import { useState, useEffect, useCallback } from "react";
+import {
+  listTurfs,
+  listTurfBookings,
+  confirmBooking as apiConfirmBooking,
+  cancelBookingAdmin,
+  completeBooking as apiCompleteBooking,
+  markNoShow as apiMarkNoShow,
+  ApiError,
+  type TurfRead,
+  type BookingRead,
+} from "@/lib/api";
 
 const STATUS_OPTIONS = ["all", "pending", "confirmed", "completed", "cancelled", "no_show"];
 
 export default function BookingsPage() {
-  const [bookings, setBookings] = useState<Booking[]>([]);
-  const [loaded, setLoaded] = useState(false);
+  const [turfs, setTurfs] = useState<TurfRead[]>([]);
+  const [selectedTurfId, setSelectedTurfId] = useState<string | null>(null);
+  const [bookings, setBookings] = useState<BookingRead[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [bookingsLoading, setBookingsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("all");
-  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [cancelConfirm, setCancelConfirm] = useState<string | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
 
-  // Load bookings from localStorage on mount
-  useEffect(() => {
+  const fetchBookings = useCallback(async (turfId: string) => {
+    setBookingsLoading(true);
+    setError(null);
     try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        setBookings(JSON.parse(stored));
-      } else {
-        setBookings(DEFAULT_BOOKINGS);
-      }
-    } catch {
-      setBookings(DEFAULT_BOOKINGS);
+      const data = await listTurfBookings(turfId);
+      setBookings(data);
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Failed to load bookings";
+      setError(message);
+    } finally {
+      setBookingsLoading(false);
     }
-    setLoaded(true);
   }, []);
 
-  // Persist bookings to localStorage whenever they change
+  // Load turfs on mount, then fetch bookings for the first turf
   useEffect(() => {
-    if (loaded) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(bookings));
+    let cancelled = false;
+    async function init() {
+      setLoading(true);
+      setError(null);
+      try {
+        const turfData = await listTurfs();
+        if (cancelled) return;
+        setTurfs(turfData);
+        if (turfData.length > 0) {
+          const firstId = turfData[0].id;
+          setSelectedTurfId(firstId);
+          const bookingData = await listTurfBookings(firstId);
+          if (cancelled) return;
+          setBookings(bookingData);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        const message = err instanceof ApiError ? err.message : "Failed to load data";
+        setError(message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     }
-  }, [bookings, loaded]);
+    init();
+    return () => { cancelled = true; };
+  }, []);
 
-  function confirmBooking(id: string) {
-    setBookings((prev) =>
-      prev.map((b) => (b.id === id ? { ...b, status: "confirmed" } : b))
-    );
+  function handleTurfChange(turfId: string) {
+    setSelectedTurfId(turfId);
+    fetchBookings(turfId);
   }
 
-  function cancelBooking(id: string) {
-    setBookings((prev) =>
-      prev.map((b) => (b.id === id ? { ...b, status: "cancelled" } : b))
-    );
+  function handleRetry() {
+    if (selectedTurfId) {
+      fetchBookings(selectedTurfId);
+    } else {
+      // Re-trigger full init by reloading
+      window.location.reload();
+    }
   }
 
-  function deleteBooking(id: string) {
-    setBookings((prev) => prev.filter((b) => b.id !== id));
-    setDeleteConfirm(null);
+  async function handleConfirm(id: string) {
+    setActionLoading(id);
+    setError(null);
+    try {
+      const updated = await apiConfirmBooking(id);
+      setBookings((prev) => prev.map((b) => (b.id === id ? updated : b)));
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Failed to confirm booking";
+      setError(message);
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  async function handleCancel(id: string) {
+    if (!cancelReason.trim()) return;
+    setActionLoading(id);
+    setError(null);
+    try {
+      const updated = await cancelBookingAdmin(id, cancelReason.trim());
+      setBookings((prev) => prev.map((b) => (b.id === id ? updated : b)));
+      setCancelConfirm(null);
+      setCancelReason("");
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Failed to cancel booking";
+      setError(message);
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  async function handleComplete(id: string) {
+    setActionLoading(id);
+    setError(null);
+    try {
+      const updated = await apiCompleteBooking(id);
+      setBookings((prev) => prev.map((b) => (b.id === id ? updated : b)));
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Failed to complete booking";
+      setError(message);
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  async function handleNoShow(id: string) {
+    setActionLoading(id);
+    setError(null);
+    try {
+      const updated = await apiMarkNoShow(id);
+      setBookings((prev) => prev.map((b) => (b.id === id ? updated : b)));
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Failed to mark no-show";
+      setError(message);
+    } finally {
+      setActionLoading(null);
+    }
   }
 
   const filtered = filter === "all" ? bookings : bookings.filter((b) => b.status === filter);
 
+  const turfNameMap = turfs.reduce<Record<string, string>>((acc, t) => {
+    acc[t.id] = t.name;
+    return acc;
+  }, {});
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <div className="flex items-center gap-3 text-slate-400">
+          <svg className="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+          <span className="text-sm">Loading bookings...</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
+      {/* Error Banner */}
+      {error && (
+        <div className="flex items-center justify-between rounded-lg border border-rose-500/20 bg-rose-500/10 px-4 py-3">
+          <p className="text-sm text-rose-400">{error}</p>
+          <button
+            onClick={handleRetry}
+            className="rounded-md bg-rose-500/20 px-3 py-1 text-xs font-medium text-rose-300 transition-colors hover:bg-rose-500/30"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-lg font-semibold text-white">Bookings</h2>
           <p className="text-sm text-slate-500">Manage bookings across all turfs</p>
         </div>
-        <div className="flex gap-2">
-          {STATUS_OPTIONS.map((s) => (
-            <button
-              key={s}
-              onClick={() => setFilter(s)}
-              className={`rounded-lg px-3 py-1.5 text-xs font-medium capitalize transition-all ${
-                filter === s
-                  ? "bg-indigo-500/15 text-indigo-400 ring-1 ring-indigo-500/30"
-                  : "bg-white/[0.03] text-slate-400 hover:bg-white/[0.06] hover:text-slate-200"
-              }`}
+        <div className="flex items-center gap-4">
+          {/* Turf Selector */}
+          {turfs.length > 0 && (
+            <select
+              value={selectedTurfId || ""}
+              onChange={(e) => handleTurfChange(e.target.value)}
+              className="rounded-lg border border-white/[0.06] bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-slate-200 outline-none transition-colors hover:bg-white/[0.06] focus:ring-1 focus:ring-indigo-500/30"
             >
-              {s === "all" ? "All" : s.replace("_", " ")}
-            </button>
-          ))}
+              {turfs.map((t) => (
+                <option key={t.id} value={t.id} className="bg-slate-900 text-slate-200">
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {/* Status Filters */}
+          <div className="flex gap-2">
+            {STATUS_OPTIONS.map((s) => (
+              <button
+                key={s}
+                onClick={() => setFilter(s)}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium capitalize transition-all ${
+                  filter === s
+                    ? "bg-indigo-500/15 text-indigo-400 ring-1 ring-indigo-500/30"
+                    : "bg-white/[0.03] text-slate-400 hover:bg-white/[0.06] hover:text-slate-200"
+                }`}
+              >
+                {s === "all" ? "All" : s.replace("_", " ")}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
       {/* Table */}
       <div className="glass-card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Booking ID</th>
-                <th>Customer</th>
-                <th>Turf</th>
-                <th>Date</th>
-                <th>Time Slot</th>
-                <th>Type</th>
-                <th>Amount</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.length === 0 && (
+        {bookingsLoading ? (
+          <div className="flex items-center justify-center py-16">
+            <div className="flex items-center gap-3 text-slate-400">
+              <svg className="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              <span className="text-sm">Loading bookings...</span>
+            </div>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="data-table">
+              <thead>
                 <tr>
-                  <td colSpan={9} className="py-12 text-center text-sm text-slate-500">
-                    No bookings found{filter !== "all" ? ` with status "${filter.replace("_", " ")}"` : ""}
-                  </td>
+                  <th>Booking ID</th>
+                  <th>Turf</th>
+                  <th>Date</th>
+                  <th>Time Slot</th>
+                  <th>Duration</th>
+                  <th>Type</th>
+                  <th>Amount</th>
+                  <th>Status</th>
+                  <th>Actions</th>
                 </tr>
-              )}
-              {filtered.map((bk) => (
-                <tr key={bk.id}>
-                  <td className="font-mono text-xs text-indigo-400">{bk.id}</td>
-                  <td>
-                    <div className="font-medium text-white">{bk.user}</div>
-                    <div className="text-[11px] text-slate-600">{bk.email}</div>
-                  </td>
-                  <td>{bk.turf}</td>
-                  <td>{bk.date}</td>
-                  <td className="text-xs">{bk.start} – {bk.end}</td>
-                  <td>
-                    <span className="rounded-md bg-white/[0.05] px-2 py-0.5 text-[11px] font-medium capitalize text-slate-300">{bk.type}</span>
-                  </td>
-                  <td className="font-medium text-white">₹{bk.amount.toLocaleString()}</td>
-                  <td><StatusBadge status={bk.status} /></td>
-                  <td>
-                    <div className="flex gap-1">
-                      {bk.status === "pending" && (
-                        <button
-                          onClick={() => confirmBooking(bk.id)}
-                          className="rounded-md bg-emerald-500/10 px-2 py-1 text-[11px] font-medium text-emerald-400 transition-colors hover:bg-emerald-500/20"
-                        >
-                          Confirm
-                        </button>
+              </thead>
+              <tbody>
+                {filtered.length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="py-12 text-center text-sm text-slate-500">
+                      No bookings found{filter !== "all" ? ` with status "${filter.replace("_", " ")}"` : ""}
+                    </td>
+                  </tr>
+                )}
+                {filtered.map((bk) => (
+                  <tr key={bk.id}>
+                    <td className="font-mono text-xs text-indigo-400">{bk.id.slice(0, 8)}</td>
+                    <td>{turfNameMap[bk.turf_id] || bk.turf_id.slice(0, 8)}</td>
+                    <td>{bk.booking_date}</td>
+                    <td className="text-xs">{bk.start_time} – {bk.end_time}</td>
+                    <td className="text-xs">{bk.duration_mins} min</td>
+                    <td>
+                      <span className="rounded-md bg-white/[0.05] px-2 py-0.5 text-[11px] font-medium capitalize text-slate-300">
+                        {bk.booking_type}
+                      </span>
+                    </td>
+                    <td className="font-medium text-white">
+                      <div>₹{bk.final_price.toLocaleString()}</div>
+                      {bk.discount_amount > 0 && (
+                        <div className="text-[10px] text-emerald-500">-₹{bk.discount_amount.toLocaleString()} disc.</div>
                       )}
-                      {(bk.status === "pending" || bk.status === "confirmed") && (
-                        <button
-                          onClick={() => cancelBooking(bk.id)}
-                          className="rounded-md bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-400 transition-colors hover:bg-amber-500/20"
-                        >
-                          Cancel
-                        </button>
-                      )}
-                      {/* Delete button */}
-                      {deleteConfirm === bk.id ? (
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => deleteBooking(bk.id)}
-                            className="rounded-md bg-rose-500/20 px-2 py-1 text-[11px] font-medium text-rose-400 transition-colors hover:bg-rose-500/30"
-                          >
-                            Yes, Delete
-                          </button>
-                          <button
-                            onClick={() => setDeleteConfirm(null)}
-                            className="rounded-md bg-white/[0.04] px-2 py-1 text-[11px] font-medium text-slate-400 transition-colors hover:bg-white/[0.08]"
-                          >
-                            No
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => setDeleteConfirm(bk.id)}
-                          className="rounded-md bg-rose-500/10 p-1 text-rose-400 transition-colors hover:bg-rose-500/20"
-                          title="Delete booking"
-                        >
-                          <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <polyline points="3 6 5 6 21 6" />
-                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                            <line x1="10" y1="11" x2="10" y2="17" />
-                            <line x1="14" y1="11" x2="14" y2="17" />
-                          </svg>
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                    </td>
+                    <td><StatusBadge status={bk.status} /></td>
+                    <td>
+                      <div className="flex gap-1">
+                        {actionLoading === bk.id ? (
+                          <span className="flex items-center gap-1 text-[11px] text-slate-500">
+                            <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                            </svg>
+                            Updating...
+                          </span>
+                        ) : (
+                          <>
+                            {bk.status === "pending" && (
+                              <button
+                                onClick={() => handleConfirm(bk.id)}
+                                className="rounded-md bg-emerald-500/10 px-2 py-1 text-[11px] font-medium text-emerald-400 transition-colors hover:bg-emerald-500/20"
+                              >
+                                Confirm
+                              </button>
+                            )}
+                            {bk.status === "confirmed" && (
+                              <>
+                                <button
+                                  onClick={() => handleComplete(bk.id)}
+                                  className="rounded-md bg-sky-500/10 px-2 py-1 text-[11px] font-medium text-sky-400 transition-colors hover:bg-sky-500/20"
+                                >
+                                  Complete
+                                </button>
+                                <button
+                                  onClick={() => handleNoShow(bk.id)}
+                                  className="rounded-md bg-slate-500/10 px-2 py-1 text-[11px] font-medium text-slate-400 transition-colors hover:bg-slate-500/20"
+                                >
+                                  No-Show
+                                </button>
+                              </>
+                            )}
+                            {(bk.status === "pending" || bk.status === "confirmed") && (
+                              <>
+                                {cancelConfirm === bk.id ? (
+                                  <div className="flex items-center gap-1">
+                                    <input
+                                      type="text"
+                                      value={cancelReason}
+                                      onChange={(e) => setCancelReason(e.target.value)}
+                                      placeholder="Reason..."
+                                      className="w-28 rounded-md border border-white/[0.06] bg-white/[0.03] px-2 py-1 text-[11px] text-slate-200 outline-none placeholder:text-slate-600 focus:ring-1 focus:ring-amber-500/30"
+                                    />
+                                    <button
+                                      onClick={() => handleCancel(bk.id)}
+                                      disabled={!cancelReason.trim()}
+                                      className="rounded-md bg-amber-500/20 px-2 py-1 text-[11px] font-medium text-amber-400 transition-colors hover:bg-amber-500/30 disabled:opacity-40"
+                                    >
+                                      Yes
+                                    </button>
+                                    <button
+                                      onClick={() => { setCancelConfirm(null); setCancelReason(""); }}
+                                      className="rounded-md bg-white/[0.04] px-2 py-1 text-[11px] font-medium text-slate-400 transition-colors hover:bg-white/[0.08]"
+                                    >
+                                      No
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    onClick={() => setCancelConfirm(bk.id)}
+                                    className="rounded-md bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-400 transition-colors hover:bg-amber-500/20"
+                                  >
+                                    Cancel
+                                  </button>
+                                )}
+                              </>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

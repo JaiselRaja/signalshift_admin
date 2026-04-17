@@ -1,12 +1,9 @@
 "use client";
 
-const MOCK_USERS = [
-  { id: "1", name: "Rahul Sharma", email: "rahul@email.com", role: "player", phone: "+91 9876543210", bookings: 12, isActive: true, lastLogin: "2 hours ago" },
-  { id: "2", name: "Priya Patel", email: "priya@email.com", role: "team_manager", phone: "+91 9876543211", bookings: 8, isActive: true, lastLogin: "5 hours ago" },
-  { id: "3", name: "Admin User", email: "admin@signalshift.in", role: "turf_admin", phone: "+91 9876543212", bookings: 0, isActive: true, lastLogin: "1 hour ago" },
-  { id: "4", name: "Sneha Gupta", email: "sneha@email.com", role: "player", phone: "+91 9876543213", bookings: 5, isActive: true, lastLogin: "1 day ago" },
-  { id: "5", name: "Vikram Singh", email: "vikram@email.com", role: "player", phone: "+91 9876543214", bookings: 3, isActive: false, lastLogin: "1 week ago" },
-];
+import { useEffect, useState, useCallback } from "react";
+import { listUsers, updateUserRole, ApiError, type UserRead } from "@/lib/api";
+
+const ROLES = ["super_admin", "turf_admin", "team_manager", "player"] as const;
 
 const ROLE_COLORS: Record<string, string> = {
   super_admin: "bg-rose-500/10 text-rose-400 border-rose-500/20",
@@ -15,9 +12,74 @@ const ROLE_COLORS: Record<string, string> = {
   player: "bg-slate-500/10 text-slate-400 border-slate-500/20",
 };
 
+function formatDate(iso: string) {
+  return new Date(iso).toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function initials(name: string | null) {
+  if (!name) return "?";
+  return name
+    .split(" ")
+    .map((n) => n[0])
+    .join("")
+    .toUpperCase();
+}
+
 export default function UsersPage() {
+  const [users, setUsers] = useState<UserRead[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [roleFilter, setRoleFilter] = useState<string>("all");
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+
+  const fetchUsers = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await listUsers();
+      setUsers(data);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setError(`Failed to load users: ${err.message} (${err.status})`);
+      } else {
+        setError("Failed to load users. Please try again.");
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchUsers();
+  }, [fetchUsers]);
+
+  async function handleRoleChange(userId: string, newRole: string) {
+    setUpdatingId(userId);
+    setError(null);
+    try {
+      const updated = await updateUserRole(userId, newRole);
+      setUsers((prev) => prev.map((u) => (u.id === userId ? updated : u)));
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setError(`Failed to update role: ${err.message} (${err.status})`);
+      } else {
+        setError("Failed to update role. Please try again.");
+      }
+    } finally {
+      setUpdatingId(null);
+    }
+  }
+
+  const filtered =
+    roleFilter === "all" ? users : users.filter((u) => u.role === roleFilter);
+
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-semibold text-white">Users</h2>
@@ -25,61 +87,126 @@ export default function UsersPage() {
         </div>
         <div className="flex gap-2">
           <span className="rounded-lg bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-slate-400">
-            {MOCK_USERS.length} total users
+            {filtered.length} of {users.length} users
           </span>
         </div>
       </div>
 
+      {/* Error banner */}
+      {error && (
+        <div className="flex items-center justify-between rounded-lg border border-rose-500/20 bg-rose-500/10 px-4 py-3">
+          <p className="text-sm text-rose-400">{error}</p>
+          <button
+            onClick={() => setError(null)}
+            className="ml-4 text-xs font-medium text-rose-400 hover:text-rose-300"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* Role filter */}
+      <div className="flex gap-2">
+        {["all", ...ROLES].map((role) => (
+          <button
+            key={role}
+            onClick={() => setRoleFilter(role)}
+            className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+              roleFilter === role
+                ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/30"
+                : "bg-white/[0.04] text-slate-400 border border-transparent hover:bg-white/[0.08] hover:text-white"
+            }`}
+          >
+            {role === "all" ? "All" : role.replace(/_/g, " ")}
+          </button>
+        ))}
+      </div>
+
+      {/* Table */}
       <div className="glass-card overflow-hidden">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>User</th>
-              <th>Role</th>
-              <th>Phone</th>
-              <th>Bookings</th>
-              <th>Status</th>
-              <th>Last Login</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {MOCK_USERS.map((user) => (
-              <tr key={user.id}>
-                <td>
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-500 text-xs font-bold text-white">
-                      {user.name.split(" ").map((n) => n[0]).join("")}
-                    </div>
-                    <div>
-                      <div className="font-medium text-white">{user.name}</div>
-                      <div className="text-[11px] text-slate-500">{user.email}</div>
-                    </div>
-                  </div>
-                </td>
-                <td>
-                  <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${ROLE_COLORS[user.role]}`}>
-                    {user.role.replace("_", " ")}
-                  </span>
-                </td>
-                <td className="font-mono text-xs">{user.phone}</td>
-                <td>{user.bookings}</td>
-                <td>
-                  <span className={`inline-flex items-center gap-1.5 text-xs ${user.isActive ? "text-emerald-400" : "text-slate-500"}`}>
-                    <span className={`h-1.5 w-1.5 rounded-full ${user.isActive ? "bg-emerald-400" : "bg-slate-600"}`} />
-                    {user.isActive ? "Active" : "Inactive"}
-                  </span>
-                </td>
-                <td className="text-xs text-slate-500">{user.lastLogin}</td>
-                <td>
-                  <button className="rounded-md bg-white/[0.04] px-2 py-1 text-[11px] font-medium text-slate-400 transition-colors hover:bg-white/[0.08] hover:text-white">
-                    Change Role
-                  </button>
-                </td>
+        {loading ? (
+          <div className="flex items-center justify-center py-16">
+            <div className="flex flex-col items-center gap-3">
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
+              <p className="text-sm text-slate-500">Loading users...</p>
+            </div>
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="flex items-center justify-center py-16">
+            <p className="text-sm text-slate-500">
+              {users.length === 0 ? "No users found." : "No users match the selected filter."}
+            </p>
+          </div>
+        ) : (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Phone</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Joined</th>
+                <th>Actions</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {filtered.map((user) => (
+                <tr key={user.id}>
+                  <td>
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-500 text-xs font-bold text-white">
+                        {initials(user.full_name)}
+                      </div>
+                      <span className="font-medium text-white">
+                        {user.full_name || "—"}
+                      </span>
+                    </div>
+                  </td>
+                  <td className="text-xs text-slate-400">{user.email}</td>
+                  <td className="font-mono text-xs">{user.phone || "—"}</td>
+                  <td>
+                    <span
+                      className={`inline-flex rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${ROLE_COLORS[user.role] || ROLE_COLORS.player}`}
+                    >
+                      {user.role.replace(/_/g, " ")}
+                    </span>
+                  </td>
+                  <td>
+                    <span
+                      className={`inline-flex items-center gap-1.5 text-xs ${user.is_active ? "text-emerald-400" : "text-slate-500"}`}
+                    >
+                      <span
+                        className={`h-1.5 w-1.5 rounded-full ${user.is_active ? "bg-emerald-400" : "bg-slate-600"}`}
+                      />
+                      {user.is_active ? "Active" : "Inactive"}
+                    </span>
+                  </td>
+                  <td className="text-xs text-slate-500">
+                    {formatDate(user.created_at)}
+                  </td>
+                  <td>
+                    <select
+                      value={user.role}
+                      disabled={updatingId === user.id}
+                      onChange={(e) => handleRoleChange(user.id, e.target.value)}
+                      className="rounded-md border border-white/[0.06] bg-white/[0.04] px-2 py-1 text-[11px] font-medium text-slate-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white focus:border-indigo-500/40 disabled:opacity-50"
+                    >
+                      {ROLES.map((r) => (
+                        <option key={r} value={r} className="bg-slate-900 text-slate-300">
+                          {r.replace(/_/g, " ")}
+                        </option>
+                      ))}
+                    </select>
+                    {updatingId === user.id && (
+                      <span className="ml-2 inline-block h-3 w-3 animate-spin rounded-full border border-indigo-500 border-t-transparent" />
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );

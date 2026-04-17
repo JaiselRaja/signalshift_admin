@@ -1,13 +1,8 @@
 "use client";
 
-const MOCK_PAYMENTS = [
-  { id: "TXN-9001", booking: "BK-2401", user: "Rahul Sharma", gateway: "razorpay", amount: 1200, status: "success", method: "UPI", createdAt: "2026-04-11 16:30" },
-  { id: "TXN-9000", booking: "BK-2400", user: "Priya Patel", gateway: "razorpay", amount: 1500, status: "initiated", method: "—", createdAt: "2026-04-11 15:10" },
-  { id: "TXN-8999", booking: "BK-2399", user: "Arjun Mehta", gateway: "razorpay", amount: 1200, status: "success", method: "Card", createdAt: "2026-04-11 12:45" },
-  { id: "TXN-8998", booking: "BK-2398", user: "Sneha Gupta", gateway: "razorpay", amount: 1800, status: "success", method: "UPI", createdAt: "2026-04-11 10:20" },
-  { id: "TXN-8997", booking: "BK-2397", user: "Vikram Singh", gateway: "razorpay", amount: 1500, status: "refunded", method: "UPI", createdAt: "2026-04-10 18:30" },
-  { id: "TXN-8996", booking: "BK-2396", user: "Ananya Roy", gateway: "manual", amount: 1000, status: "success", method: "Cash", createdAt: "2026-04-10 16:00" },
-];
+import { useCallback, useEffect, useState } from "react";
+import { listPayments, ApiError } from "@/lib/api";
+import type { PaymentRead } from "@/lib/api";
 
 const STATUS_STYLES: Record<string, string> = {
   success: "bg-emerald-500/10 text-emerald-400",
@@ -18,8 +13,27 @@ const STATUS_STYLES: Record<string, string> = {
 };
 
 export default function PaymentsPage() {
-  const totalRevenue = MOCK_PAYMENTS.filter((p) => p.status === "success").reduce((s, p) => s + p.amount, 0);
-  const refunded = MOCK_PAYMENTS.filter((p) => p.status === "refunded").reduce((s, p) => s + p.amount, 0);
+  const [payments, setPayments] = useState<PaymentRead[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchPayments = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await listPayments();
+      setPayments(data);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to load payments");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchPayments(); }, [fetchPayments]);
+
+  const totalRevenue = payments.filter((p) => p.status === "success").reduce((s, p) => s + p.amount, 0);
+  const refunded = payments.filter((p) => p.status === "refunded").reduce((s, p) => s + (p.refund_amount ?? 0), 0);
 
   return (
     <div className="space-y-6">
@@ -28,19 +42,32 @@ export default function PaymentsPage() {
         <p className="text-sm text-slate-500">Transaction history and revenue tracking</p>
       </div>
 
+      {error && (
+        <div className="flex items-center justify-between rounded-xl border border-rose-500/20 bg-rose-500/5 px-4 py-3 text-sm text-rose-400">
+          <span>{error}</span>
+          <button onClick={fetchPayments} className="ml-4 text-xs font-medium text-rose-300 hover:text-white">Retry</button>
+        </div>
+      )}
+
       {/* Summary Cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <div className="glass-card p-5">
           <div className="text-xs font-medium uppercase tracking-wider text-slate-500">Total Revenue</div>
-          <div className="mt-2 text-2xl font-bold text-emerald-400">₹{totalRevenue.toLocaleString()}</div>
+          <div className="mt-2 text-2xl font-bold text-emerald-400">
+            {loading ? <span className="inline-block h-7 w-24 animate-pulse rounded bg-white/[0.06]" /> : `₹${totalRevenue.toLocaleString()}`}
+          </div>
         </div>
         <div className="glass-card p-5">
           <div className="text-xs font-medium uppercase tracking-wider text-slate-500">Refunded</div>
-          <div className="mt-2 text-2xl font-bold text-sky-400">₹{refunded.toLocaleString()}</div>
+          <div className="mt-2 text-2xl font-bold text-sky-400">
+            {loading ? <span className="inline-block h-7 w-24 animate-pulse rounded bg-white/[0.06]" /> : `₹${refunded.toLocaleString()}`}
+          </div>
         </div>
         <div className="glass-card p-5">
           <div className="text-xs font-medium uppercase tracking-wider text-slate-500">Transactions</div>
-          <div className="mt-2 text-2xl font-bold text-white">{MOCK_PAYMENTS.length}</div>
+          <div className="mt-2 text-2xl font-bold text-white">
+            {loading ? <span className="inline-block h-7 w-12 animate-pulse rounded bg-white/[0.06]" /> : payments.length}
+          </div>
         </div>
       </div>
 
@@ -51,7 +78,6 @@ export default function PaymentsPage() {
             <tr>
               <th>Transaction ID</th>
               <th>Booking</th>
-              <th>Customer</th>
               <th>Gateway</th>
               <th>Method</th>
               <th>Amount</th>
@@ -60,22 +86,29 @@ export default function PaymentsPage() {
             </tr>
           </thead>
           <tbody>
-            {MOCK_PAYMENTS.map((p) => (
-              <tr key={p.id}>
-                <td className="font-mono text-xs text-indigo-400">{p.id}</td>
-                <td className="font-mono text-xs">{p.booking}</td>
-                <td className="font-medium text-white">{p.user}</td>
-                <td className="capitalize">{p.gateway}</td>
-                <td>{p.method}</td>
-                <td className="font-medium text-white">₹{p.amount.toLocaleString()}</td>
-                <td>
-                  <span className={`inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-medium capitalize ${STATUS_STYLES[p.status]}`}>
-                    {p.status}
-                  </span>
-                </td>
-                <td className="text-xs text-slate-500">{p.createdAt}</td>
-              </tr>
-            ))}
+            {loading ? (
+              Array.from({ length: 4 }).map((_, i) => (
+                <tr key={i}><td colSpan={7}><div className="h-5 animate-pulse rounded bg-white/[0.04]" /></td></tr>
+              ))
+            ) : payments.length === 0 ? (
+              <tr><td colSpan={7} className="py-12 text-center text-sm text-slate-500">No transactions yet</td></tr>
+            ) : (
+              payments.map((p) => (
+                <tr key={p.id}>
+                  <td className="font-mono text-xs text-indigo-400">{p.id.slice(0, 8)}</td>
+                  <td className="font-mono text-xs">{p.booking_id.slice(0, 8)}</td>
+                  <td className="capitalize">{p.gateway}</td>
+                  <td>{p.payment_method || "—"}</td>
+                  <td className="font-medium text-white">₹{p.amount.toLocaleString()}</td>
+                  <td>
+                    <span className={`inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-medium capitalize ${STATUS_STYLES[p.status] || STATUS_STYLES.initiated}`}>
+                      {p.status}
+                    </span>
+                  </td>
+                  <td className="text-xs text-slate-500">{new Date(p.created_at).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
       </div>

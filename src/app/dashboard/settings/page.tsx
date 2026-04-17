@@ -1,6 +1,90 @@
 "use client";
 
+import { useCallback, useEffect, useState } from "react";
+import { getMe, api, ApiError } from "@/lib/api";
+
+interface TenantConfig {
+  id: string;
+  name: string;
+  slug: string;
+  config: Record<string, unknown>;
+  is_active: boolean;
+}
+
 export default function SettingsPage() {
+  const [tenant, setTenant] = useState<TenantConfig | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+
+  // Form state
+  const [businessName, setBusinessName] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [timezone, setTimezone] = useState("Asia/Kolkata");
+
+  const fetchTenant = useCallback(async () => {
+    setLoading(true);
+    try {
+      // Get the current user to find tenant_id, then fetch tenant
+      const me = await getMe();
+      const tenants = await api.get<TenantConfig[]>("/tenants/");
+      const myTenant = tenants.find((t) => t.id === me.tenant_id);
+      if (myTenant) {
+        setTenant(myTenant);
+        setBusinessName(myTenant.name);
+        const cfg = myTenant.config || {};
+        setContactEmail((cfg.contact_email as string) || "");
+        setPhone((cfg.phone as string) || "");
+        setTimezone((cfg.timezone as string) || "Asia/Kolkata");
+      }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to load settings");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchTenant(); }, [fetchTenant]);
+
+  async function handleSave() {
+    if (!tenant) return;
+    setSaving(true);
+    setError(null);
+    setSuccess(false);
+    try {
+      await api.patch(`/tenants/${tenant.id}`, {
+        name: businessName,
+        config: {
+          ...(tenant.config || {}),
+          contact_email: contactEmail,
+          phone,
+          timezone,
+        },
+      });
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 3000);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to save settings");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div><h2 className="text-lg font-semibold text-white">Settings</h2></div>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="glass-card h-64 animate-pulse" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -8,19 +92,30 @@ export default function SettingsPage() {
         <p className="text-sm text-slate-500">Tenant configuration and system preferences</p>
       </div>
 
+      {error && (
+        <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 px-4 py-3 text-sm text-rose-400">{error}</div>
+      )}
+      {success && (
+        <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-sm text-emerald-400">Settings saved successfully.</div>
+      )}
+
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Tenant Info */}
         <div className="glass-card p-6">
           <h3 className="mb-4 text-sm font-semibold text-white">Tenant Information</h3>
           <div className="space-y-4">
-            <SettingField label="Business Name" value="Signal Shift Arena" />
-            <SettingField label="Slug" value="signal-shift" disabled />
-            <SettingField label="Contact Email" value="admin@signalshift.in" />
-            <SettingField label="Phone" value="+91 98765 43210" />
-            <SettingField label="Timezone" value="Asia/Kolkata" />
+            <SettingField label="Business Name" value={businessName} onChange={setBusinessName} />
+            <SettingField label="Slug" value={tenant?.slug || ""} disabled />
+            <SettingField label="Contact Email" value={contactEmail} onChange={setContactEmail} />
+            <SettingField label="Phone" value={phone} onChange={setPhone} />
+            <SettingField label="Timezone" value={timezone} onChange={setTimezone} />
           </div>
-          <button className="mt-4 rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-600">
-            Save Changes
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="mt-4 rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-600 disabled:opacity-50"
+          >
+            {saving ? "Saving..." : "Save Changes"}
           </button>
         </div>
 
@@ -28,23 +123,11 @@ export default function SettingsPage() {
         <div className="glass-card p-6">
           <h3 className="mb-4 text-sm font-semibold text-white">Booking Defaults</h3>
           <div className="space-y-4">
-            <SettingField label="Default Slot Duration (mins)" value="60" type="number" />
-            <SettingField label="Advance Booking Days" value="14" type="number" />
-            <SettingField label="Min Cancellation Hours" value="4" type="number" />
-            <SettingField label="GST Rate (%)" value="18" type="number" />
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-slate-400">Auto-Confirm Bookings</label>
-              <div className="flex items-center gap-3">
-                <button className="relative h-6 w-11 rounded-full bg-indigo-500 transition-colors">
-                  <span className="absolute left-[22px] top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform" />
-                </button>
-                <span className="text-xs text-slate-400">Enabled</span>
-              </div>
-            </div>
+            <SettingField label="Default Slot Duration (mins)" value="60" disabled />
+            <SettingField label="Advance Booking Days" value="14" disabled />
+            <SettingField label="GST Rate (%)" value="18" disabled />
           </div>
-          <button className="mt-4 rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-600">
-            Save Changes
-          </button>
+          <p className="mt-4 text-xs text-slate-500">These values are configured via environment variables on the backend.</p>
         </div>
 
         {/* Payment Gateway */}
@@ -52,33 +135,23 @@ export default function SettingsPage() {
           <h3 className="mb-4 text-sm font-semibold text-white">Payment Gateway</h3>
           <div className="space-y-4">
             <SettingField label="Gateway" value="Razorpay" disabled />
-            <SettingField label="Key ID" value="rzp_live_••••••••" type="password" />
-            <SettingField label="Key Secret" value="••••••••••••••••" type="password" />
-            <SettingField label="Webhook Secret" value="••••••••••••••••" type="password" />
+            <SettingField label="Status" value="Configured via environment" disabled />
           </div>
-          <button className="mt-4 rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-600">
-            Update Keys
-          </button>
+          <p className="mt-4 text-xs text-slate-500">Payment gateway credentials are managed via backend environment variables for security.</p>
         </div>
 
-        {/* Notifications */}
+        {/* System Info */}
         <div className="glass-card p-6">
-          <h3 className="mb-4 text-sm font-semibold text-white">Notifications</h3>
-          <div className="space-y-3">
-            {[
-              { label: "Booking confirmation email", enabled: true },
-              { label: "Cancellation notification", enabled: true },
-              { label: "Payment receipt", enabled: true },
-              { label: "Tournament updates", enabled: false },
-              { label: "Promotional emails", enabled: false },
-            ].map((item) => (
-              <div key={item.label} className="flex items-center justify-between rounded-lg bg-white/[0.02] px-3 py-2.5">
-                <span className="text-sm text-slate-300">{item.label}</span>
-                <button className={`relative h-5 w-9 rounded-full transition-colors ${item.enabled ? "bg-indigo-500" : "bg-slate-700"}`}>
-                  <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${item.enabled ? "left-[18px]" : "left-0.5"}`} />
-                </button>
-              </div>
-            ))}
+          <h3 className="mb-4 text-sm font-semibold text-white">System Info</h3>
+          <div className="space-y-2.5">
+            <div className="flex justify-between text-sm">
+              <span className="text-slate-400">Tenant ID</span>
+              <span className="font-mono text-xs text-slate-300">{tenant?.id.slice(0, 8) || "—"}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-slate-400">Active</span>
+              <span className={tenant?.is_active ? "text-emerald-400" : "text-rose-400"}>{tenant?.is_active ? "Yes" : "No"}</span>
+            </div>
           </div>
         </div>
       </div>
@@ -86,15 +159,19 @@ export default function SettingsPage() {
   );
 }
 
-function SettingField({ label, value, type = "text", disabled = false }: { label: string; value: string; type?: string; disabled?: boolean }) {
+function SettingField({ label, value, disabled = false, onChange }: {
+  label: string; value: string; disabled?: boolean; onChange?: (v: string) => void;
+}) {
   return (
     <div>
       <label className="mb-1.5 block text-xs font-medium text-slate-400">{label}</label>
       <input
-        type={type}
-        defaultValue={value}
+        type="text"
+        value={value}
+        onChange={onChange ? (e) => onChange(e.target.value) : undefined}
+        readOnly={!onChange}
         disabled={disabled}
-        className={`w-full rounded-lg border border-white/[0.06] bg-white/[0.03] px-3 py-2 text-sm text-white placeholder-slate-600 outline-none transition-all focus:border-indigo-500/40 focus:ring-1 focus:ring-indigo-500/20 ${disabled ? "cursor-not-allowed opacity-50" : ""}`}
+        className={`w-full rounded-lg border border-white/[0.06] bg-white/[0.03] px-3 py-2 text-sm text-white outline-none transition-all focus:border-indigo-500/40 ${disabled ? "cursor-not-allowed opacity-50" : ""}`}
       />
     </div>
   );
