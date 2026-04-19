@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { listPayments, ApiError } from "@/lib/api";
+import { listPayments, verifyPayment, rejectPayment, ApiError } from "@/lib/api";
 import type { PaymentRead } from "@/lib/api";
 
 const STATUS_STYLES: Record<string, string> = {
@@ -16,6 +16,7 @@ export default function PaymentsPage() {
   const [payments, setPayments] = useState<PaymentRead[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [actingId, setActingId] = useState<string | null>(null);
 
   const fetchPayments = useCallback(async () => {
     setLoading(true);
@@ -31,6 +32,33 @@ export default function PaymentsPage() {
   }, []);
 
   useEffect(() => { fetchPayments(); }, [fetchPayments]);
+
+  async function handleVerify(paymentId: string) {
+    if (!confirm("Confirm this payment? This will also confirm the associated booking.")) return;
+    setActingId(paymentId);
+    try {
+      await verifyPayment(paymentId);
+      await fetchPayments();
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : "Failed to verify.");
+    } finally {
+      setActingId(null);
+    }
+  }
+
+  async function handleReject(paymentId: string) {
+    const reason = prompt("Reason for rejection? (e.g. UTR not found in bank statement)");
+    if (!reason || reason.trim().length < 2) return;
+    setActingId(paymentId);
+    try {
+      await rejectPayment(paymentId, reason.trim());
+      await fetchPayments();
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : "Failed to reject.");
+    } finally {
+      setActingId(null);
+    }
+  }
 
   const totalRevenue = payments.filter((p) => p.status === "success").reduce((s, p) => s + p.amount, 0);
   const refunded = payments.filter((p) => p.status === "refunded").reduce((s, p) => s + (p.refund_amount ?? 0), 0);
@@ -76,38 +104,68 @@ export default function PaymentsPage() {
         <table className="data-table">
           <thead>
             <tr>
-              <th>Transaction ID</th>
+              <th>Txn</th>
               <th>Booking</th>
               <th>Gateway</th>
-              <th>Method</th>
+              <th>UTR</th>
               <th>Amount</th>
               <th>Status</th>
               <th>Date</th>
+              <th className="text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               Array.from({ length: 4 }).map((_, i) => (
-                <tr key={i}><td colSpan={7}><div className="h-5 animate-pulse rounded bg-white/[0.04]" /></td></tr>
+                <tr key={i}><td colSpan={8}><div className="h-5 animate-pulse rounded bg-white/[0.04]" /></td></tr>
               ))
             ) : payments.length === 0 ? (
-              <tr><td colSpan={7} className="py-12 text-center text-sm text-slate-500">No transactions yet</td></tr>
+              <tr><td colSpan={8} className="py-12 text-center text-sm text-slate-500">No transactions yet</td></tr>
             ) : (
-              payments.map((p) => (
-                <tr key={p.id}>
-                  <td className="font-mono text-xs text-indigo-400">{p.id.slice(0, 8)}</td>
-                  <td className="font-mono text-xs">{p.booking_id.slice(0, 8)}</td>
-                  <td className="capitalize">{p.gateway}</td>
-                  <td>{p.payment_method || "—"}</td>
-                  <td className="font-medium text-white">₹{p.amount.toLocaleString()}</td>
-                  <td>
-                    <span className={`inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-medium capitalize ${STATUS_STYLES[p.status] || STATUS_STYLES.initiated}`}>
-                      {p.status}
-                    </span>
-                  </td>
-                  <td className="text-xs text-slate-500">{new Date(p.created_at).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
-                </tr>
-              ))
+              payments.map((p) => {
+                const isProcessing = p.status === "processing";
+                const busy = actingId === p.id;
+                return (
+                  <tr key={p.id}>
+                    <td className="font-mono text-xs text-indigo-400">{p.id.slice(0, 8)}</td>
+                    <td className="font-mono text-xs">{p.booking_id.slice(0, 8)}</td>
+                    <td className="capitalize">{p.gateway.replace("_", " ")}</td>
+                    <td className="font-mono text-xs text-slate-300">{p.utr ?? "—"}</td>
+                    <td className="font-medium text-white">₹{p.amount.toLocaleString()}</td>
+                    <td>
+                      <span className={`inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-medium capitalize ${STATUS_STYLES[p.status] || STATUS_STYLES.initiated}`}>
+                        {p.status}
+                      </span>
+                      {p.reject_reason && (
+                        <div className="mt-1 text-[10px] italic text-rose-300">{p.reject_reason}</div>
+                      )}
+                    </td>
+                    <td className="text-xs text-slate-500">{new Date(p.created_at).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
+                    <td className="text-right">
+                      {isProcessing ? (
+                        <div className="flex justify-end gap-1">
+                          <button
+                            onClick={() => handleVerify(p.id)}
+                            disabled={busy}
+                            className="rounded-md bg-emerald-500/15 px-2.5 py-1 text-xs font-medium text-emerald-300 transition-colors hover:bg-emerald-500/25 disabled:opacity-50"
+                          >
+                            Verify
+                          </button>
+                          <button
+                            onClick={() => handleReject(p.id)}
+                            disabled={busy}
+                            className="rounded-md bg-rose-500/15 px-2.5 py-1 text-xs font-medium text-rose-300 transition-colors hover:bg-rose-500/25 disabled:opacity-50"
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-slate-600">—</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>

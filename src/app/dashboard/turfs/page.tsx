@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useEffect, FormEvent } from "react";
 import { listTurfs, createTurf, updateTurf, ApiError, TurfRead } from "@/lib/api";
 
@@ -371,9 +372,15 @@ export default function TurfsPage() {
 
                 {/* Footer */}
                 <div className="mt-4 flex items-center justify-between border-t border-white/[0.04] pt-3">
-                  <span className="text-xs text-slate-500">
-                    Added {turf.created_at.split("T")[0]}
-                  </span>
+                  <Link
+                    href={`/dashboard/turfs/${turf.id}`}
+                    className="inline-flex items-center gap-1 text-xs font-medium text-indigo-400 transition-colors hover:text-indigo-300"
+                  >
+                    Manage
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="9 18 15 12 9 6" />
+                    </svg>
+                  </Link>
                   <div className="flex gap-1">
                     {/* Toggle Active */}
                     <button

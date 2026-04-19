@@ -1,8 +1,8 @@
 "use client";
 
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { checkHealth } from "@/lib/api";
+import { checkHealth, clearToken } from "@/lib/api";
 
 const PAGE_TITLES: Record<string, { title: string; breadcrumb: string }> = {
   "/dashboard": { title: "Dashboard", breadcrumb: "Overview" },
@@ -18,9 +18,18 @@ const PAGE_TITLES: Record<string, { title: string; breadcrumb: string }> = {
 
 export default function Topbar() {
   const pathname = usePathname();
+  const router = useRouter();
   const [apiOnline, setApiOnline] = useState<boolean | null>(null);
 
-  const page = PAGE_TITLES[pathname] || { title: "Page", breadcrumb: "" };
+  function handleLogout() {
+    clearToken();
+    router.replace("/login");
+  }
+
+  const fallback = pathname.startsWith("/dashboard/turfs/")
+    ? { title: "Turf Detail", breadcrumb: "Management → Turfs → Detail" }
+    : { title: "Page", breadcrumb: "" };
+  const page = PAGE_TITLES[pathname] || fallback;
 
   useEffect(() => {
     checkHealth().then(setApiOnline);
@@ -78,6 +87,19 @@ export default function Topbar() {
             {apiOnline === null ? "Checking..." : apiOnline ? "API Online" : "API Offline"}
           </span>
         </div>
+
+        {/* Logout */}
+        <button
+          onClick={handleLogout}
+          title="Sign out"
+          className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-white/[0.04] hover:text-white"
+        >
+          <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+            <polyline points="16 17 21 12 16 7" />
+            <line x1="21" y1="12" x2="9" y2="12" />
+          </svg>
+        </button>
       </div>
     </header>
   );

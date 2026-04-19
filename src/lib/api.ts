@@ -53,7 +53,41 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(endpoint: string, opts: FetchOptions = {}): Promise<T> {
+// ─── Silent refresh ──────────────────────────────────
+
+let isRefreshing = false;
+let pendingQueue: Array<{
+  resolve: (token: string) => void;
+  reject: (err: unknown) => void;
+}> = [];
+
+async function doRefresh(): Promise<string> {
+  const refreshToken =
+    typeof window !== "undefined" ? localStorage.getItem("ss_refresh_token") : null;
+
+  if (!refreshToken) throw new ApiError(401, "No refresh token");
+
+  const res = await fetch(`${API_BASE}/auth/refresh`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+  });
+
+  if (!res.ok) throw new ApiError(401, "Refresh failed");
+
+  const data = await res.json();
+  setToken(data.access_token);
+  if (typeof window !== "undefined") {
+    localStorage.setItem("ss_refresh_token", data.refresh_token);
+  }
+  return data.access_token;
+}
+
+async function request<T>(
+  endpoint: string,
+  opts: FetchOptions = {},
+  isRetry = false,
+): Promise<T> {
   const { method = "GET", body, headers = {}, noAuth = false } = opts;
 
   const token = getToken();
@@ -72,10 +106,45 @@ async function request<T>(endpoint: string, opts: FetchOptions = {}): Promise<T>
 
   const res = await fetch(`${API_BASE}${endpoint}`, config);
 
+  if (res.status === 401 && !noAuth && !isRetry) {
+    // Silent-refresh path
+    if (isRefreshing) {
+      return new Promise<T>((resolve, reject) => {
+        pendingQueue.push({
+          resolve: (newToken) => {
+            headers["Authorization"] = `Bearer ${newToken}`;
+            resolve(request<T>(endpoint, { ...opts, headers }, true));
+          },
+          reject,
+        });
+      });
+    }
+
+    isRefreshing = true;
+    try {
+      const newToken = await doRefresh();
+      pendingQueue.forEach(({ resolve }) => resolve(newToken));
+      pendingQueue = [];
+      headers["Authorization"] = `Bearer ${newToken}`;
+      return request<T>(endpoint, { ...opts, headers }, true);
+    } catch (err) {
+      pendingQueue.forEach(({ reject }) => reject(err));
+      pendingQueue = [];
+      clearToken();
+      if (typeof window !== "undefined") {
+        window.location.href = "/login";
+      }
+      throw err instanceof ApiError ? err : new ApiError(401, "Session expired");
+    } finally {
+      isRefreshing = false;
+    }
+  }
+
   if (res.status === 401 && !noAuth) {
+    // Retry already happened and still 401 → bail
     clearToken();
     if (typeof window !== "undefined") {
-      window.location.href = "/";
+      window.location.href = "/login";
     }
     throw new ApiError(401, "Session expired");
   }
@@ -142,9 +211,9 @@ export async function devLogin(email: string, password: string) {
 
 export async function checkHealth() {
   try {
-    const res = await fetch(
-      (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000") + "/health"
-    );
+    const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+    const origin = new URL(base).origin;
+    const res = await fetch(`${origin}/health`);
     return res.ok;
   } catch { return false; }
 }
@@ -186,8 +255,63 @@ export interface TurfRead {
 }
 
 export async function listTurfs() { return api.get<TurfRead[]>("/turfs/"); }
+export async function getTurf(id: string) { return api.get<TurfRead>(`/turfs/${id}`); }
 export async function createTurf(body: Record<string, unknown>) { return api.post<TurfRead>("/turfs/", body); }
 export async function updateTurf(id: string, body: Record<string, unknown>) { return api.patch<TurfRead>(`/turfs/${id}`, body); }
+
+// ─── Slot Rules ──────────────────────────────────────
+
+export interface SlotRuleRead {
+  id: string;
+  turf_id: string;
+  day_of_week: number;
+  start_time: string;
+  end_time: string;
+  duration_mins: number;
+  slot_type: string;
+  base_price: number;
+  currency: string;
+  max_capacity: number;
+  is_active: boolean;
+  valid_from: string | null;
+  valid_until: string | null;
+}
+
+export async function listSlotRules(turfId: string) {
+  return api.get<SlotRuleRead[]>(`/turfs/${turfId}/slot-rules`);
+}
+export async function createSlotRule(turfId: string, body: Record<string, unknown>) {
+  return api.post<SlotRuleRead>(`/turfs/${turfId}/slot-rules`, body);
+}
+export async function updateSlotRule(ruleId: string, body: Record<string, unknown>) {
+  return api.patch<SlotRuleRead>(`/turfs/slot-rules/${ruleId}`, body);
+}
+export async function deleteSlotRule(ruleId: string) {
+  return api.delete<void>(`/turfs/slot-rules/${ruleId}`);
+}
+
+// ─── Overrides ───────────────────────────────────────
+
+export interface SlotOverrideRead {
+  id: string;
+  turf_id: string;
+  override_date: string;
+  start_time: string | null;
+  end_time: string | null;
+  override_type: string;
+  override_price: number | null;
+  reason: string | null;
+}
+
+export async function listOverrides(turfId: string) {
+  return api.get<SlotOverrideRead[]>(`/turfs/${turfId}/overrides`);
+}
+export async function createOverride(turfId: string, body: Record<string, unknown>) {
+  return api.post<SlotOverrideRead>(`/turfs/${turfId}/overrides`, body);
+}
+export async function deleteOverride(overrideId: string) {
+  return api.delete<void>(`/turfs/overrides/${overrideId}`);
+}
 
 // ─── Bookings ────────────────────────────────────────
 
@@ -211,6 +335,9 @@ export interface BookingRead {
   cancel_reason: string | null;
   refund_amount: number | null;
   notes: string | null;
+  user_name: string | null;
+  user_email: string | null;
+  user_phone: string | null;
   created_at: string;
 }
 
@@ -240,11 +367,21 @@ export interface PaymentRead {
   payment_method: string | null;
   refund_id: string | null;
   refund_amount: number | null;
+  utr: string | null;
+  verified_by: string | null;
+  verified_at: string | null;
+  reject_reason: string | null;
   created_at: string;
 }
 
 export async function listPayments() { return api.get<PaymentRead[]>("/payments/"); }
 export async function refundPayment(bookingId: string) { return api.post<PaymentRead>(`/payments/refund/${bookingId}`); }
+export async function verifyPayment(paymentId: string) {
+  return api.post<PaymentRead>(`/payments/${paymentId}/verify`);
+}
+export async function rejectPayment(paymentId: string, reason: string) {
+  return api.post<PaymentRead>(`/payments/${paymentId}/reject`, { reason });
+}
 
 // ─── Teams ───────────────────────────────────────────
 

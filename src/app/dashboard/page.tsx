@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { listTurfs, listTurfBookings, listTeams, listTournaments, listUsers, ApiError } from "@/lib/api";
 import type { BookingRead, TurfRead, TournamentRead } from "@/lib/api";
 
@@ -12,6 +13,7 @@ interface DashboardStats {
 }
 
 export default function DashboardPage() {
+  const router = useRouter();
   const [stats, setStats] = useState<DashboardStats>({ totalBookings: 0, revenue: 0, activeUsers: 0, turfCount: 0 });
   const [recentBookings, setRecentBookings] = useState<(BookingRead & { turfName: string })[]>([]);
   const [tournaments, setTournaments] = useState<TournamentRead[]>([]);
@@ -127,8 +129,12 @@ export default function DashboardPage() {
                   <tr><td colSpan={6} className="py-8 text-center text-sm text-slate-500">No bookings yet</td></tr>
                 ) : (
                   recentBookings.map((bk) => (
-                    <tr key={bk.id}>
-                      <td className="font-mono text-xs text-indigo-400">{bk.id.slice(0, 8)}</td>
+                    <tr
+                      key={bk.id}
+                      onClick={() => router.push(`/dashboard/bookings?turf=${bk.turf_id}&highlight=${bk.id}`)}
+                      className="cursor-pointer transition-colors hover:bg-white/[0.02]"
+                    >
+                      <td className="font-mono text-xs text-indigo-400 hover:underline">{bk.id.slice(0, 8)}</td>
                       <td className="font-medium text-white">{bk.turfName}</td>
                       <td>{bk.booking_date}</td>
                       <td className="text-xs">{bk.start_time.slice(0, 5)} – {bk.end_time.slice(0, 5)}</td>

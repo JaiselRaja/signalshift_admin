@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   listTurfs,
   listTurfBookings,
@@ -16,6 +17,9 @@ import {
 const STATUS_OPTIONS = ["all", "pending", "confirmed", "completed", "cancelled", "no_show"];
 
 export default function BookingsPage() {
+  const searchParams = useSearchParams();
+  const initialTurfId = searchParams.get("turf");
+  const highlightId = searchParams.get("highlight");
   const [turfs, setTurfs] = useState<TurfRead[]>([]);
   const [selectedTurfId, setSelectedTurfId] = useState<string | null>(null);
   const [bookings, setBookings] = useState<BookingRead[]>([]);
@@ -52,9 +56,11 @@ export default function BookingsPage() {
         if (cancelled) return;
         setTurfs(turfData);
         if (turfData.length > 0) {
-          const firstId = turfData[0].id;
-          setSelectedTurfId(firstId);
-          const bookingData = await listTurfBookings(firstId);
+          const preferredId = initialTurfId && turfData.some((t) => t.id === initialTurfId)
+            ? initialTurfId
+            : turfData[0].id;
+          setSelectedTurfId(preferredId);
+          const bookingData = await listTurfBookings(preferredId);
           if (cancelled) return;
           setBookings(bookingData);
         }
@@ -239,6 +245,7 @@ export default function BookingsPage() {
                 <tr>
                   <th>Booking ID</th>
                   <th>Turf</th>
+                  <th>Customer</th>
                   <th>Date</th>
                   <th>Time Slot</th>
                   <th>Duration</th>
@@ -251,15 +258,31 @@ export default function BookingsPage() {
               <tbody>
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="py-12 text-center text-sm text-slate-500">
+                    <td colSpan={10} className="py-12 text-center text-sm text-slate-500">
                       No bookings found{filter !== "all" ? ` with status "${filter.replace("_", " ")}"` : ""}
                     </td>
                   </tr>
                 )}
                 {filtered.map((bk) => (
-                  <tr key={bk.id}>
+                  <tr
+                    key={bk.id}
+                    className={bk.id === highlightId ? "ring-2 ring-indigo-400/60 bg-indigo-500/[0.06]" : ""}
+                  >
                     <td className="font-mono text-xs text-indigo-400">{bk.id.slice(0, 8)}</td>
                     <td>{turfNameMap[bk.turf_id] || bk.turf_id.slice(0, 8)}</td>
+                    <td>
+                      <div className="text-sm text-slate-200">{bk.user_name ?? "—"}</div>
+                      {bk.user_phone ? (
+                        <a
+                          href={`tel:${bk.user_phone}`}
+                          className="font-mono text-[11px] text-indigo-300 hover:underline"
+                        >
+                          {bk.user_phone}
+                        </a>
+                      ) : (
+                        <div className="text-[11px] text-slate-500">{bk.user_email ?? ""}</div>
+                      )}
+                    </td>
                     <td>{bk.booking_date}</td>
                     <td className="text-xs">{bk.start_time} – {bk.end_time}</td>
                     <td className="text-xs">{bk.duration_mins} min</td>
