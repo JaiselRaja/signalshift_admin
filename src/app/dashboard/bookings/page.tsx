@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { Suspense, useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   listTurfs,
@@ -17,6 +17,14 @@ import {
 const STATUS_OPTIONS = ["all", "pending", "confirmed", "completed", "cancelled", "no_show"];
 
 export default function BookingsPage() {
+  return (
+    <Suspense fallback={null}>
+      <BookingsContent />
+    </Suspense>
+  );
+}
+
+function BookingsContent() {
   const searchParams = useSearchParams();
   const initialTurfId = searchParams.get("turf");
   const highlightId = searchParams.get("highlight");
