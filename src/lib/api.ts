@@ -196,19 +196,6 @@ export async function verifyOtp(email: string, otp: string) {
   return data;
 }
 
-export async function devLogin(email: string, password: string) {
-  const data = await api.post<{
-    access_token: string;
-    refresh_token: string;
-    expires_in: number;
-  }>("/auth/dev-login", { email, password, tenant_slug: TENANT_SLUG }, { noAuth: true });
-  setToken(data.access_token);
-  if (typeof window !== "undefined") {
-    localStorage.setItem("ss_refresh_token", data.refresh_token);
-  }
-  return data;
-}
-
 export async function checkHealth() {
   try {
     const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
