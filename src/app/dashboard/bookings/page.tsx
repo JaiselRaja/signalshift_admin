@@ -300,9 +300,9 @@ function BookingsContent() {
                       </span>
                     </td>
                     <td className="font-medium text-white">
-                      <div>₹{bk.final_price.toLocaleString()}</div>
-                      {bk.discount_amount > 0 && (
-                        <div className="text-[10px] text-emerald-500">-₹{bk.discount_amount.toLocaleString()} disc.</div>
+                      <div>₹{Number(bk.final_price || 0).toLocaleString()}</div>
+                      {Number(bk.discount_amount || 0) > 0 && (
+                        <div className="text-[10px] text-emerald-500">-₹{Number(bk.discount_amount || 0).toLocaleString()} disc.</div>
                       )}
                     </td>
                     <td><StatusBadge status={bk.status} /></td>

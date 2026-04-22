@@ -50,9 +50,11 @@ export default function DashboardPage() {
 
       const revenue = allBookings
         .filter((b) => b.status === "confirmed" || b.status === "completed")
-        .reduce((sum, b) => sum + b.final_price, 0);
+        .reduce((sum, b) => sum + Number(b.final_price || 0), 0);
 
-      setStats({ totalBookings: allBookings.length, revenue, activeUsers: users.length, turfCount: turfs.length });
+      const totalBookings = allBookings.filter((b) => b.status !== "cancelled").length;
+
+      setStats({ totalBookings, revenue, activeUsers: users.length, turfCount: turfs.length });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to load dashboard data");
     } finally {
@@ -138,7 +140,7 @@ export default function DashboardPage() {
                       <td className="font-medium text-white">{bk.turfName}</td>
                       <td>{bk.booking_date}</td>
                       <td className="text-xs">{bk.start_time.slice(0, 5)} – {bk.end_time.slice(0, 5)}</td>
-                      <td className="font-medium text-white">₹{bk.final_price.toLocaleString()}</td>
+                      <td className="font-medium text-white">₹{Number(bk.final_price || 0).toLocaleString()}</td>
                       <td><StatusBadge status={bk.status} /></td>
                     </tr>
                   ))

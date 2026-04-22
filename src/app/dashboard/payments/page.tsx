@@ -60,8 +60,8 @@ export default function PaymentsPage() {
     }
   }
 
-  const totalRevenue = payments.filter((p) => p.status === "success").reduce((s, p) => s + p.amount, 0);
-  const refunded = payments.filter((p) => p.status === "refunded").reduce((s, p) => s + (p.refund_amount ?? 0), 0);
+  const totalRevenue = payments.filter((p) => p.status === "success").reduce((s, p) => s + Number(p.amount || 0), 0);
+  const refunded = payments.filter((p) => p.status === "refunded").reduce((s, p) => s + Number(p.refund_amount ?? 0), 0);
 
   return (
     <div className="space-y-6">
@@ -131,7 +131,7 @@ export default function PaymentsPage() {
                     <td className="font-mono text-xs">{p.booking_id.slice(0, 8)}</td>
                     <td className="capitalize">{p.gateway.replace("_", " ")}</td>
                     <td className="font-mono text-xs text-slate-300">{p.utr ?? "—"}</td>
-                    <td className="font-medium text-white">₹{p.amount.toLocaleString()}</td>
+                    <td className="font-medium text-white">₹{Number(p.amount || 0).toLocaleString()}</td>
                     <td>
                       <span className={`inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-medium capitalize ${STATUS_STYLES[p.status] || STATUS_STYLES.initiated}`}>
                         {p.status}
