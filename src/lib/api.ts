@@ -343,7 +343,7 @@ export async function cancelBookingAdmin(id: string, reason: string) {
 
 export interface PaymentRead {
   id: string;
-  booking_id: string;
+  booking_id: string | null;
   user_id: string;
   gateway: string;
   gateway_txn_id: string | null;
@@ -457,4 +457,117 @@ export interface PricingRuleRead {
 
 export async function createPricingRule(turfId: string, body: Record<string, unknown>) {
   return api.post<PricingRuleRead>(`/bookings/pricing-rules/${turfId}`, body);
+}
+
+// ─── Plans ──────────────────────────────────────────
+
+export type PlanType = "monthly" | "daily";
+
+export interface PlanRead {
+  id: string;
+  tenant_id: string;
+  code: string;
+  name: string;
+  tagline: string | null;
+  plan_type: PlanType;
+  price: number | string;
+  price_unit: string;
+  hours_per_month: number | null;
+  discount_pct: number | null;
+  advance_window_days: number | null;
+  slot_window_start: string | null; // "HH:MM:SS"
+  slot_window_end: string | null;
+  perks: string[];
+  featured: boolean;
+  display_order: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlanCreate {
+  code: string;
+  name: string;
+  tagline?: string | null;
+  plan_type: PlanType;
+  price: number;
+  price_unit: string;
+  hours_per_month?: number | null;
+  discount_pct?: number | null;
+  advance_window_days?: number | null;
+  slot_window_start?: string | null;
+  slot_window_end?: string | null;
+  perks: string[];
+  featured?: boolean;
+  display_order?: number;
+  is_active?: boolean;
+}
+
+export type PlanUpdate = Partial<Omit<PlanCreate, "code">>;
+
+export async function listPlansAdmin() {
+  return api.get<PlanRead[]>("/plans/admin");
+}
+
+export async function createPlan(body: PlanCreate) {
+  return api.post<PlanRead>("/plans/", body);
+}
+
+export async function updatePlan(planId: string, body: PlanUpdate) {
+  return api.patch<PlanRead>(`/plans/${planId}`, body);
+}
+
+export async function deletePlan(planId: string) {
+  return api.delete<void>(`/plans/${planId}`);
+}
+
+// ─── Subscriptions ──────────────────────────────────
+
+export interface SubscriptionSlotRead {
+  id: string;
+  day_of_week: number;
+  start_time: string;
+  end_time: string;
+}
+
+export interface SubscriptionRead {
+  id: string;
+  tenant_id: string;
+  user_id: string;
+  plan_id: string;
+  turf_id: string;
+  status: string;
+  starts_on: string | null;
+  expires_on: string | null;
+  payment_id: string | null;
+  created_at: string;
+  updated_at: string;
+  slots: SubscriptionSlotRead[];
+  plan?: {
+    code: string;
+    name: string;
+    price: number | string;
+    price_unit: string;
+  } | null;
+  payment?: {
+    id: string;
+    status: string;
+    utr: string | null;
+    amount: number | string;
+  } | null;
+}
+
+export async function listAdminSubscriptions() {
+  return api.get<SubscriptionRead[]>("/subscriptions/admin");
+}
+
+export async function cancelSubscription(
+  subscriptionId: string,
+  reason?: string,
+  cancelPast = false,
+) {
+  return api.post<SubscriptionRead>(`/subscriptions/${subscriptionId}/cancel`, {
+    reason: reason ?? null,
+    cancel_past: cancelPast,
+  });
 }

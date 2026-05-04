@@ -9,9 +9,12 @@ import {
   cancelBookingAdmin,
   completeBooking as apiCompleteBooking,
   markNoShow as apiMarkNoShow,
+  listAdminSubscriptions,
+  cancelSubscription as apiCancelSubscription,
   ApiError,
   type TurfRead,
   type BookingRead,
+  type SubscriptionRead,
 } from "@/lib/api";
 
 const STATUS_OPTIONS = ["all", "pending", "confirmed", "completed", "cancelled", "no_show"];
@@ -31,6 +34,7 @@ function BookingsContent() {
   const [turfs, setTurfs] = useState<TurfRead[]>([]);
   const [selectedTurfId, setSelectedTurfId] = useState<string | null>(null);
   const [bookings, setBookings] = useState<BookingRead[]>([]);
+  const [subscriptions, setSubscriptions] = useState<SubscriptionRead[]>([]);
   const [loading, setLoading] = useState(true);
   const [bookingsLoading, setBookingsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,6 +42,9 @@ function BookingsContent() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [cancelConfirm, setCancelConfirm] = useState<string | null>(null);
   const [cancelReason, setCancelReason] = useState("");
+  const [cancelSubConfirm, setCancelSubConfirm] = useState<SubscriptionRead | null>(null);
+  const [cancelSubReason, setCancelSubReason] = useState("");
+  const [showPlanRows, setShowPlanRows] = useState(false);
 
   const fetchBookings = useCallback(async (turfId: string) => {
     setBookingsLoading(true);
@@ -60,9 +67,13 @@ function BookingsContent() {
       setLoading(true);
       setError(null);
       try {
-        const turfData = await listTurfs();
+        const [turfData, subs] = await Promise.all([
+          listTurfs(),
+          listAdminSubscriptions().catch(() => [] as SubscriptionRead[]),
+        ]);
         if (cancelled) return;
         setTurfs(turfData);
+        setSubscriptions(subs);
         if (turfData.length > 0) {
           const preferredId = initialTurfId && turfData.some((t) => t.id === initialTurfId)
             ? initialTurfId
@@ -157,7 +168,41 @@ function BookingsContent() {
     }
   }
 
-  const filtered = filter === "all" ? bookings : bookings.filter((b) => b.status === filter);
+  async function handleCancelSubscription() {
+    if (!cancelSubConfirm) return;
+    if (!cancelSubReason.trim()) return;
+    setActionLoading(cancelSubConfirm.id);
+    setError(null);
+    try {
+      await apiCancelSubscription(cancelSubConfirm.id, cancelSubReason.trim());
+      // Reload both lists
+      const [subs, bookingData] = await Promise.all([
+        listAdminSubscriptions().catch(() => subscriptions),
+        selectedTurfId ? listTurfBookings(selectedTurfId) : Promise.resolve(bookings),
+      ]);
+      setSubscriptions(subs);
+      setBookings(bookingData);
+      setCancelSubConfirm(null);
+      setCancelSubReason("");
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Failed to cancel subscription";
+      setError(message);
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  // Hide subscription-typed bookings from the main list by default — they're
+  // shown grouped in the Active Subscriptions panel instead.
+  const visibleBookings = showPlanRows
+    ? bookings
+    : bookings.filter((b) => b.booking_type !== "subscription");
+  const filtered =
+    filter === "all" ? visibleBookings : visibleBookings.filter((b) => b.status === filter);
+
+  const activeSubs = subscriptions.filter(
+    (s) => s.status === "active" || s.status === "pending",
+  );
 
   const turfNameMap = turfs.reduce<Record<string, string>>((acc, t) => {
     acc[t.id] = t.name;
@@ -234,6 +279,179 @@ function BookingsContent() {
         </div>
       </div>
 
+      {/* Active Subscriptions panel */}
+      {activeSubs.length > 0 && (
+        <div className="glass-card">
+          <div className="flex items-center justify-between border-b border-white/[0.06] px-5 py-4">
+            <div>
+              <h2 className="text-sm font-semibold text-white">
+                Active subscriptions
+              </h2>
+              <p className="text-xs text-slate-500">
+                Plan members on recurring weekly slots — cancel here to drop all future bookings at once
+              </p>
+            </div>
+            <label className="flex items-center gap-2 text-xs text-slate-400">
+              <input
+                type="checkbox"
+                checked={showPlanRows}
+                onChange={(e) => setShowPlanRows(e.target.checked)}
+                className="h-3.5 w-3.5 rounded border-white/20 bg-white/5 text-indigo-500"
+              />
+              Show child bookings in table
+            </label>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Plan</th>
+                  <th>Customer</th>
+                  <th>Slots</th>
+                  <th>Starts</th>
+                  <th>Expires</th>
+                  <th>Paid</th>
+                  <th>Status</th>
+                  <th className="text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {activeSubs.map((s) => {
+                  const slots = [...s.slots].sort((a, b) =>
+                    a.day_of_week !== b.day_of_week
+                      ? a.day_of_week - b.day_of_week
+                      : a.start_time.localeCompare(b.start_time),
+                  );
+                  const slotsLabel = slots
+                    .map(
+                      (sl) =>
+                        `${["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"][sl.day_of_week]} ${sl.start_time.slice(0, 5)}`,
+                    )
+                    .join("  ·  ");
+                  const busy = actionLoading === s.id;
+                  const isPending = s.status === "pending";
+                  return (
+                    <tr key={s.id}>
+                      <td className="font-medium text-white">
+                        <div>{s.plan?.name ?? "—"}</div>
+                        <div className="text-[11px] text-slate-500 font-mono">
+                          {s.id.slice(0, 8)}
+                        </div>
+                      </td>
+                      <td className="text-xs text-slate-300 font-mono">
+                        {s.user_id.slice(0, 8)}
+                      </td>
+                      <td>
+                        <div className="flex flex-wrap gap-1">
+                          {slots.map((sl) => (
+                            <span
+                              key={sl.id}
+                              className="rounded-md bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-300"
+                            >
+                              {["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"][sl.day_of_week]}{" "}
+                              {sl.start_time.slice(0, 5)}
+                            </span>
+                          ))}
+                        </div>
+                        <div className="mt-1 text-[10px] text-slate-500">{slotsLabel}</div>
+                      </td>
+                      <td className="text-xs">{s.starts_on ?? "—"}</td>
+                      <td className="text-xs">{s.expires_on ?? "—"}</td>
+                      <td className="font-medium text-white">
+                        ₹{Number(s.plan?.price || 0).toLocaleString()}
+                      </td>
+                      <td>
+                        <span
+                          className={`inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-medium capitalize ${
+                            isPending
+                              ? "bg-amber-500/10 text-amber-400"
+                              : "bg-emerald-500/10 text-emerald-400"
+                          }`}
+                        >
+                          {s.status}
+                        </span>
+                        {isPending && s.payment?.utr && (
+                          <div className="mt-1 text-[10px] text-slate-500 font-mono">
+                            UTR: {s.payment.utr}
+                          </div>
+                        )}
+                      </td>
+                      <td className="text-right">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCancelSubConfirm(s);
+                            setCancelSubReason("");
+                          }}
+                          disabled={busy}
+                          className="rounded-md bg-rose-500/15 px-2.5 py-1 text-xs font-medium text-rose-300 hover:bg-rose-500/25 disabled:opacity-50"
+                        >
+                          Cancel plan
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Cancel subscription confirm modal */}
+      {cancelSubConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+          onClick={() => {
+            setCancelSubConfirm(null);
+            setCancelSubReason("");
+          }}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#0d0e14] p-6 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-base font-semibold text-white">Cancel this subscription?</h3>
+            <p className="mt-2 text-sm text-slate-400">
+              <span className="font-semibold text-white">
+                {cancelSubConfirm.plan?.name ?? "Subscription"}
+              </span>{" "}
+              · {cancelSubConfirm.slots.length} weekly slot
+              {cancelSubConfirm.slots.length === 1 ? "" : "s"}
+              <br />
+              All future bookings tied to this plan will be cancelled.
+            </p>
+            <textarea
+              value={cancelSubReason}
+              onChange={(e) => setCancelSubReason(e.target.value)}
+              placeholder="Reason for cancellation (required)"
+              className="mt-4 w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-sm text-white placeholder-white/40 outline-none focus:border-rose-500/50"
+              rows={3}
+            />
+            <div className="mt-4 flex gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setCancelSubConfirm(null);
+                  setCancelSubReason("");
+                }}
+                className="flex-1 rounded-full border border-white/10 bg-white/[0.03] py-2.5 text-sm font-medium text-slate-300 hover:bg-white/[0.06]"
+              >
+                Keep
+              </button>
+              <button
+                type="button"
+                onClick={handleCancelSubscription}
+                disabled={!cancelSubReason.trim() || actionLoading === cancelSubConfirm.id}
+                className="flex-1 rounded-full bg-rose-500 py-2.5 text-sm font-semibold text-white hover:bg-rose-400 disabled:opacity-50"
+              >
+                {actionLoading === cancelSubConfirm.id ? "Cancelling…" : "Cancel plan"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Table */}
       <div className="glass-card overflow-hidden">
         {bookingsLoading ? (
@@ -295,14 +513,26 @@ function BookingsContent() {
                     <td className="text-xs">{bk.start_time} – {bk.end_time}</td>
                     <td className="text-xs">{bk.duration_mins} min</td>
                     <td>
-                      <span className="rounded-md bg-white/[0.05] px-2 py-0.5 text-[11px] font-medium capitalize text-slate-300">
-                        {bk.booking_type}
+                      <span
+                        className={`rounded-md px-2 py-0.5 text-[11px] font-medium capitalize ${
+                          bk.booking_type === "subscription"
+                            ? "bg-emerald-500/15 text-emerald-300"
+                            : "bg-white/[0.05] text-slate-300"
+                        }`}
+                      >
+                        {bk.booking_type === "subscription" ? "Plan" : bk.booking_type}
                       </span>
                     </td>
                     <td className="font-medium text-white">
-                      <div>₹{Number(bk.final_price || 0).toLocaleString()}</div>
-                      {Number(bk.discount_amount || 0) > 0 && (
-                        <div className="text-[10px] text-emerald-500">-₹{Number(bk.discount_amount || 0).toLocaleString()} disc.</div>
+                      {bk.booking_type === "subscription" ? (
+                        <span className="text-xs text-emerald-300">Included</span>
+                      ) : (
+                        <>
+                          <div>₹{Number(bk.final_price || 0).toLocaleString()}</div>
+                          {Number(bk.discount_amount || 0) > 0 && (
+                            <div className="text-[10px] text-emerald-500">-₹{Number(bk.discount_amount || 0).toLocaleString()} disc.</div>
+                          )}
+                        </>
                       )}
                     </td>
                     <td><StatusBadge status={bk.status} /></td>
