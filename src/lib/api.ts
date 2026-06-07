@@ -379,6 +379,36 @@ export async function createManualBooking(
   return api.post<BookingRead>("/bookings/manual", body);
 }
 
+export type SlotType = "peak" | "offpeak" | "regular" | "blocked" | "maintenance";
+
+export interface AvailableSlot {
+  date: string;           // "YYYY-MM-DD"
+  start_time: string;     // "HH:MM:SS"
+  end_time: string;       // "HH:MM:SS"
+  duration_mins: number;
+  slot_type: SlotType;
+  base_price: number;
+  computed_price: number;
+  is_available: boolean;
+  remaining_capacity: number;
+}
+
+export async function getTurfAvailability(turfId: string, targetDate: string) {
+  return api.get<AvailableSlot[]>(
+    `/turfs/${turfId}/availability?target_date=${targetDate}`,
+  );
+}
+
+export async function getTurfAvailabilityRange(
+  turfId: string,
+  startDate: string,
+  endDate: string,
+) {
+  return api.get<Record<string, AvailableSlot[]>>(
+    `/turfs/${turfId}/availability/range?start_date=${startDate}&end_date=${endDate}`,
+  );
+}
+
 // ─── Payments ────────────────────────────────────────
 
 export interface PaymentRead {

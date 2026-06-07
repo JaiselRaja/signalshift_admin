@@ -1,16 +1,28 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   listTurfs,
   lookupUserByPhone,
   createManualBooking,
+  getTurfAvailabilityRange,
   ApiError,
+  type AvailableSlot,
   type TurfRead,
   type UserLookupResponse,
 } from "@/lib/api";
+import {
+  addDays,
+  formatCurrency,
+  MAX_SLOTS_PER_BOOKING,
+  summarize,
+  toDateString,
+  toggleSlot,
+} from "@/lib/slotSelection";
+import SlotCalendar from "@/components/bookings/SlotCalendar";
+import SlotGrid, { SlotGridSkeleton } from "@/components/bookings/SlotGrid";
 
 const INPUT =
   "w-full rounded-lg border border-white/[0.06] bg-white/[0.03] px-3 py-2 text-sm text-slate-200 placeholder-slate-600 outline-none transition-colors focus:border-indigo-500/50 focus:ring-2 focus:ring-indigo-500/20";
@@ -51,10 +63,20 @@ export default function NewManualBookingPage() {
   // Slot
   const [turfs, setTurfs] = useState<TurfRead[]>([]);
   const [turfId, setTurfId] = useState("");
-  const [bookingDate, setBookingDate] = useState("");
-  const [startTime, setStartTime] = useState("");
-  const [endTime, setEndTime] = useState("");
   const [bookingType, setBookingType] = useState<BookingType>("regular");
+
+  // Slot picker (visual) state
+  const [availabilityRange, setAvailabilityRange] = useState<Record<string, AvailableSlot[]>>({});
+  const [selectedDate, setSelectedDate] = useState<string>(toDateString(new Date()));
+  const [selectedSlots, setSelectedSlots] = useState<AvailableSlot[]>([]);
+  const [maxWarning, setMaxWarning] = useState(false);
+  const [loadingAvailability, setLoadingAvailability] = useState(false);
+  const [pickerFallback, setPickerFallback] = useState(false); // turf has no slot rules
+
+  // Manual fallback inputs (used only when pickerFallback is true)
+  const [fallbackDate, setFallbackDate] = useState("");
+  const [fallbackStart, setFallbackStart] = useState("");
+  const [fallbackEnd, setFallbackEnd] = useState("");
 
   // Pricing
   const [couponCode, setCouponCode] = useState("");
@@ -82,6 +104,51 @@ export default function NewManualBookingPage() {
       })
       .catch((e) => setError(e instanceof ApiError ? e.message : "Failed to load turfs"));
   }, []);
+
+  // Load 14-day availability whenever the turf changes
+  useEffect(() => {
+    if (!turfId) return;
+    setLoadingAvailability(true);
+    setSelectedSlots([]);
+    setMaxWarning(false);
+    setSelectedDate(toDateString(new Date()));
+
+    const start = toDateString(new Date());
+    const end = toDateString(addDays(new Date(), 13));
+    getTurfAvailabilityRange(turfId, start, end)
+      .then((range) => {
+        setAvailabilityRange(range);
+        const totalSlots = Object.values(range).reduce((acc, day) => acc + day.length, 0);
+        // If the turf has no slot rules at all, fall back to manual time inputs.
+        setPickerFallback(totalSlots === 0);
+      })
+      .catch(() => {
+        // If availability fetch fails, default to manual mode so the form still works.
+        setAvailabilityRange({});
+        setPickerFallback(true);
+      })
+      .finally(() => setLoadingAvailability(false));
+  }, [turfId]);
+
+  // Slots for the date currently selected on the strip
+  const daySlots = useMemo(
+    () => availabilityRange[selectedDate] ?? [],
+    [availabilityRange, selectedDate],
+  );
+
+  const selectionSummary = summarize(selectedSlots);
+
+  function handleSelectDate(date: string) {
+    setSelectedDate(date);
+    setSelectedSlots([]);
+    setMaxWarning(false);
+  }
+
+  function handleToggleSlot(slot: AvailableSlot) {
+    const result = toggleSlot(selectedSlots, slot);
+    setSelectedSlots(result.slots);
+    setMaxWarning(result.reason === "max_reached");
+  }
 
   // Debounced phone lookup
   useEffect(() => {
@@ -121,10 +188,33 @@ export default function NewManualBookingPage() {
       setError("Phone, name, and email are required.");
       return;
     }
-    if (!turfId || !bookingDate || !startTime || !endTime) {
-      setError("Turf, date, start time, and end time are required.");
+    if (!turfId) {
+      setError("Pick a turf first.");
       return;
     }
+
+    // Resolve booking_date / start_time / end_time from picker OR fallback
+    let bookingDate: string;
+    let startTime: string;
+    let endTime: string;
+    if (pickerFallback) {
+      if (!fallbackDate || !fallbackStart || !fallbackEnd) {
+        setError("Date, start time, and end time are required.");
+        return;
+      }
+      bookingDate = fallbackDate;
+      startTime = fallbackStart.length === 5 ? `${fallbackStart}:00` : fallbackStart;
+      endTime = fallbackEnd.length === 5 ? `${fallbackEnd}:00` : fallbackEnd;
+    } else {
+      if (!selectionSummary) {
+        setError("Pick one or more time slots.");
+        return;
+      }
+      bookingDate = selectionSummary.date;
+      startTime = selectionSummary.start_time;
+      endTime = selectionSummary.end_time;
+    }
+
     if (overrideActive && !priceOverrideReason.trim()) {
       setError("Price override requires a reason.");
       return;
@@ -138,8 +228,8 @@ export default function NewManualBookingPage() {
         customer_email: email.trim().toLowerCase(),
         turf_id: turfId,
         booking_date: bookingDate,
-        start_time: startTime.length === 5 ? `${startTime}:00` : startTime,
-        end_time: endTime.length === 5 ? `${endTime}:00` : endTime,
+        start_time: startTime,
+        end_time: endTime,
         booking_type: bookingType,
         coupon_code: couponCode.trim() || null,
         price_override: overrideActive ? Number(priceOverride) : null,
@@ -237,7 +327,7 @@ export default function NewManualBookingPage() {
       {/* Slot card */}
       <div className={CARD}>
         <h2 className="mb-4 text-sm font-semibold text-white">Slot</h2>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           <div className="flex flex-col gap-1.5 md:col-span-2">
             <label className={LABEL}>Turf</label>
             <select
@@ -255,16 +345,6 @@ export default function NewManualBookingPage() {
             </select>
           </div>
           <div className="flex flex-col gap-1.5">
-            <label className={LABEL}>Date</label>
-            <input
-              type="date"
-              value={bookingDate}
-              onChange={(e) => setBookingDate(e.target.value)}
-              className={INPUT}
-              required
-            />
-          </div>
-          <div className="flex flex-col gap-1.5">
             <label className={LABEL}>Booking type</label>
             <select
               value={bookingType}
@@ -276,27 +356,94 @@ export default function NewManualBookingPage() {
               ))}
             </select>
           </div>
-          <div className="flex flex-col gap-1.5">
-            <label className={LABEL}>Start time</label>
-            <input
-              type="time"
-              value={startTime}
-              onChange={(e) => setStartTime(e.target.value)}
-              className={INPUT}
-              required
-            />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <label className={LABEL}>End time</label>
-            <input
-              type="time"
-              value={endTime}
-              onChange={(e) => setEndTime(e.target.value)}
-              className={INPUT}
-              required
-            />
-          </div>
         </div>
+
+        {/* Visual slot picker OR manual fallback */}
+        {!pickerFallback ? (
+          <div className="mt-5">
+            {loadingAvailability ? (
+              <div>
+                <div className="mb-3 h-[78px] rounded-xl bg-white/[0.03]" />
+                <SlotGridSkeleton />
+              </div>
+            ) : (
+              <>
+                <SlotCalendar
+                  availabilityRange={availabilityRange}
+                  selectedDate={selectedDate}
+                  onSelectDate={handleSelectDate}
+                />
+                <div className="my-3 flex items-center justify-between">
+                  <p className="text-xs font-semibold text-slate-300">
+                    {daySlots.filter((s) => s.is_available).length} slot
+                    {daySlots.filter((s) => s.is_available).length !== 1 ? "s" : ""} available
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    Tap up to <span className="font-semibold text-indigo-400">{MAX_SLOTS_PER_BOOKING}</span> consecutive slots
+                  </p>
+                </div>
+                <SlotGrid
+                  slots={daySlots}
+                  selectedSlots={selectedSlots}
+                  onToggleSlot={handleToggleSlot}
+                />
+                {maxWarning && (
+                  <div className="mt-3 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs font-medium text-amber-300">
+                    Maximum {MAX_SLOTS_PER_BOOKING} slots per booking.
+                  </div>
+                )}
+                {selectionSummary && (
+                  <div className="mt-3 rounded-xl border border-indigo-500/30 bg-indigo-500/[0.06] px-4 py-3 text-sm text-slate-200">
+                    <span className="font-semibold">Selected:</span>{" "}
+                    {selectionSummary.date} · {selectionSummary.start_time.slice(0, 5)}–{selectionSummary.end_time.slice(0, 5)}
+                    {" · "}
+                    {selectionSummary.duration_mins}m
+                    {" · "}
+                    <span className="font-bold text-indigo-300">{formatCurrency(selectionSummary.total_price)}</span>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        ) : (
+          <div className="mt-5">
+            <div className="mb-3 rounded-xl border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-300">
+              This turf has no slot rules configured. Falling back to manual time entry.
+            </div>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div className="flex flex-col gap-1.5">
+                <label className={LABEL}>Date</label>
+                <input
+                  type="date"
+                  value={fallbackDate}
+                  onChange={(e) => setFallbackDate(e.target.value)}
+                  className={INPUT}
+                  required
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className={LABEL}>Start time</label>
+                <input
+                  type="time"
+                  value={fallbackStart}
+                  onChange={(e) => setFallbackStart(e.target.value)}
+                  className={INPUT}
+                  required
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className={LABEL}>End time</label>
+                <input
+                  type="time"
+                  value={fallbackEnd}
+                  onChange={(e) => setFallbackEnd(e.target.value)}
+                  className={INPUT}
+                  required
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Pricing card */}
