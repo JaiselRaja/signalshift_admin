@@ -339,6 +339,46 @@ export async function cancelBookingAdmin(id: string, reason: string) {
   return api.post<BookingRead>(`/bookings/${id}/cancel`, { reason });
 }
 
+// ─── Manual Booking (admin) ─────────────────────────
+
+export interface UserLookupResponse {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+  phone: string | null;
+  prior_bookings: number;
+}
+
+export async function lookupUserByPhone(phone: string): Promise<UserLookupResponse | null> {
+  return api.get<UserLookupResponse | null>(
+    `/users/lookup?phone=${encodeURIComponent(phone)}`,
+  );
+}
+
+export interface ManualBookingCreateBody {
+  customer_phone: string;
+  customer_name: string;
+  customer_email: string;
+  turf_id: string;
+  booking_date: string;
+  start_time: string;
+  end_time: string;
+  booking_type?: string;
+  coupon_code?: string | null;
+  price_override?: number | null;
+  price_override_reason?: string | null;
+  payment_method: "cash" | "upi" | "playspots" | "other";
+  payment_reference?: string | null;
+  admin_notes?: string | null;
+  customer_notes?: string | null;
+}
+
+export async function createManualBooking(
+  body: ManualBookingCreateBody,
+): Promise<BookingRead> {
+  return api.post<BookingRead>("/bookings/manual", body);
+}
+
 // ─── Payments ────────────────────────────────────────
 
 export interface PaymentRead {

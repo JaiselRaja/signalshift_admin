@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
   listTurfs,
@@ -245,6 +246,12 @@ function BookingsContent() {
           <p className="text-sm text-slate-500">Manage bookings across all turfs</p>
         </div>
         <div className="flex items-center gap-4">
+          <Link
+            href="/dashboard/bookings/new"
+            className="inline-flex items-center justify-center rounded-lg bg-indigo-500 px-4 py-1.5 text-xs font-semibold text-white shadow-lg shadow-indigo-500/20 transition-all hover:bg-indigo-400"
+          >
+            + Manual Booking
+          </Link>
           {/* Turf Selector */}
           {turfs.length > 0 && (
             <select
