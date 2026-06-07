@@ -34,6 +34,7 @@ const NAV_SECTIONS = [
     label: "System",
     items: [
       { name: "Settings", href: "/dashboard/settings", icon: SettingsIcon },
+      { name: "Email Notifications", href: "/dashboard/settings/notifications", icon: SettingsIcon },
     ],
   },
 ];

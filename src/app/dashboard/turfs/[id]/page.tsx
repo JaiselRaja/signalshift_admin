@@ -12,9 +12,14 @@ import {
   listOverrides,
   createOverride,
   deleteOverride,
+  listPricingRules,
+  createPricingRule,
+  updatePricingRule,
+  deletePricingRule,
   TurfRead,
   SlotRuleRead,
   SlotOverrideRead,
+  PricingRuleRead,
 } from "@/lib/api";
 
 type Tab = "info" | "rules" | "overrides" | "pricing";
@@ -26,6 +31,7 @@ export default function TurfDetailPage({ params }: { params: Promise<{ id: strin
   const [turf, setTurf] = useState<TurfRead | null>(null);
   const [rules, setRules] = useState<SlotRuleRead[]>([]);
   const [overrides, setOverrides] = useState<SlotOverrideRead[]>([]);
+  const [pricingRules, setPricingRules] = useState<PricingRuleRead[]>([]);
   const [tab, setTab] = useState<Tab>("info");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -34,14 +40,16 @@ export default function TurfDetailPage({ params }: { params: Promise<{ id: strin
     setLoading(true);
     setError(null);
     try {
-      const [t, r, o] = await Promise.all([
+      const [t, r, o, p] = await Promise.all([
         getTurf(id),
         listSlotRules(id),
         listOverrides(id),
+        listPricingRules(id),
       ]);
       setTurf(t);
       setRules(r);
       setOverrides(o);
+      setPricingRules(p);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load turf.");
     } finally {
@@ -114,7 +122,9 @@ export default function TurfDetailPage({ params }: { params: Promise<{ id: strin
       {tab === "info" && <InfoTab turf={turf} onSaved={refresh} />}
       {tab === "rules" && <RulesTab turfId={id} rules={rules} onChanged={refresh} />}
       {tab === "overrides" && <OverridesTab turfId={id} overrides={overrides} onChanged={refresh} />}
-      {tab === "pricing" && <PricingTab />}
+      {tab === "pricing" && (
+        <PricingTab turfId={id} rules={pricingRules} onChanged={refresh} />
+      )}
     </div>
   );
 }
@@ -711,15 +721,519 @@ function AddOverrideForm({
   );
 }
 
-/* ─── Pricing tab (placeholder) ─────────────── */
+/* ─── Pricing tab ────────────────────────────── */
 
-function PricingTab() {
+type PricingFormState = {
+  name: string;
+  rule_type: string;
+  priority: number;
+  adjustment_type: "fixed" | "percentage";
+  adjustment_value: string;
+  days: number[];
+  time_start: string;
+  time_end: string;
+  booking_type: string; // "" = any
+  slot_type: string;    // "" = any
+  stackable: boolean;
+  valid_from: string;
+  valid_until: string;
+  is_active: boolean;
+};
+
+const EMPTY_PRICING_FORM: PricingFormState = {
+  name: "",
+  rule_type: "surcharge",
+  priority: 0,
+  adjustment_type: "percentage",
+  adjustment_value: "",
+  days: [],
+  time_start: "",
+  time_end: "",
+  booking_type: "",
+  slot_type: "",
+  stackable: false,
+  valid_from: "",
+  valid_until: "",
+  is_active: true,
+};
+
+const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function ruleToFormState(r: PricingRuleRead): PricingFormState {
+  const c = (r.conditions ?? {}) as Record<string, unknown>;
+  const rawDays = Array.isArray(c.days) ? c.days : [];
+  const days = rawDays.filter((d): d is number => typeof d === "number");
+  const rawRange = Array.isArray(c.time_range) ? c.time_range : ["", ""];
+  return {
+    name: r.name,
+    rule_type: r.rule_type,
+    priority: r.priority,
+    adjustment_type: r.adjustment_type === "fixed" ? "fixed" : "percentage",
+    adjustment_value: String(r.adjustment_value ?? ""),
+    days,
+    time_start: typeof rawRange[0] === "string" ? rawRange[0] : "",
+    time_end: typeof rawRange[1] === "string" ? rawRange[1] : "",
+    booking_type: typeof c.booking_type === "string" ? c.booking_type : "",
+    slot_type: typeof c.slot_type === "string" ? c.slot_type : "",
+    stackable: !!r.stackable,
+    valid_from: r.valid_from ?? "",
+    valid_until: r.valid_until ?? "",
+    is_active: r.is_active,
+  };
+}
+
+function formStateToPayload(s: PricingFormState) {
+  const conditions: Record<string, unknown> = {};
+  if (s.days.length > 0) conditions.days = [...s.days].sort((a, b) => a - b);
+  if (s.time_start && s.time_end) conditions.time_range = [s.time_start, s.time_end];
+  if (s.booking_type) conditions.booking_type = s.booking_type;
+  if (s.slot_type) conditions.slot_type = s.slot_type;
+
+  return {
+    name: s.name.trim(),
+    rule_type: s.rule_type.trim() || "surcharge",
+    priority: s.priority,
+    conditions,
+    adjustment_type: s.adjustment_type,
+    adjustment_value: s.adjustment_value === "" ? 0 : Number(s.adjustment_value),
+    stackable: s.stackable,
+    valid_from: s.valid_from || null,
+    valid_until: s.valid_until || null,
+    is_active: s.is_active,
+  };
+}
+
+function summarizeConditions(r: PricingRuleRead): string {
+  const c = (r.conditions ?? {}) as Record<string, unknown>;
+  const parts: string[] = [];
+  if (Array.isArray(c.days) && c.days.length > 0) {
+    parts.push(
+      c.days
+        .map((d: unknown) => (typeof d === "number" ? DAY_LABELS[d] ?? String(d) : String(d)))
+        .join(" · "),
+    );
+  }
+  if (Array.isArray(c.time_range) && c.time_range.length === 2) {
+    parts.push(`${c.time_range[0]} – ${c.time_range[1]}`);
+  }
+  if (typeof c.booking_type === "string" && c.booking_type) {
+    parts.push(`${c.booking_type[0].toUpperCase()}${c.booking_type.slice(1)} only`);
+  }
+  if (typeof c.slot_type === "string" && c.slot_type) {
+    parts.push(
+      `${c.slot_type === "offpeak" ? "Off-peak" : c.slot_type[0].toUpperCase() + c.slot_type.slice(1)} slots only`,
+    );
+  }
+  return parts.length ? parts.join(" · ") : "Always applies";
+}
+
+function formatAdjustmentBadge(r: PricingRuleRead): string {
+  const v = Number(r.adjustment_value);
+  const sign = v >= 0 ? "+" : "";
+  return r.adjustment_type === "percentage"
+    ? `${sign}${v}%`
+    : `${sign}₹${Math.abs(v).toLocaleString()}`;
+}
+
+function PricingTab({
+  turfId,
+  rules,
+  onChanged,
+}: {
+  turfId: string;
+  rules: PricingRuleRead[];
+  onChanged: () => void;
+}) {
+  const [editing, setEditing] = useState<PricingRuleRead | null>(null);
+  const [showForm, setShowForm] = useState(false);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleToggleActive(rule: PricingRuleRead) {
+    setError(null);
+    setTogglingId(rule.id);
+    try {
+      await updatePricingRule(rule.id, { is_active: !rule.is_active });
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to toggle rule.");
+    } finally {
+      setTogglingId(null);
+    }
+  }
+
+  async function handleDelete(rule: PricingRuleRead) {
+    if (!window.confirm(`Delete pricing rule "${rule.name}"?`)) return;
+    setError(null);
+    try {
+      await deletePricingRule(rule.id);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete rule.");
+    }
+  }
+
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-8 text-sm text-slate-400">
-      Dynamic pricing rules (peak-hour multipliers, day specials, etc.) live on the{" "}
-      <Link href="/dashboard/pricing" className="text-indigo-400 hover:text-indigo-300">Pricing page</Link>.
-      <p className="mt-2 text-xs text-slate-500">Base prices are set per slot rule in the <span className="text-slate-400">Slot Rules</span> tab.</p>
+    <div className="flex flex-col gap-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-sm font-semibold text-white">Pricing Rules</h2>
+          <p className="text-xs text-slate-500">Surcharges and discounts applied on top of the base slot price.</p>
+        </div>
+        {!showForm && !editing && (
+          <button
+            onClick={() => { setEditing(null); setShowForm(true); }}
+            className={BTN_PRIMARY}
+          >
+            + New rule
+          </button>
+        )}
+      </div>
+
+      {error && (
+        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">{error}</div>
+      )}
+
+      {(showForm || editing) && (
+        <PricingForm
+          turfId={turfId}
+          initial={editing ? ruleToFormState(editing) : EMPTY_PRICING_FORM}
+          editingId={editing?.id ?? null}
+          onClose={() => { setShowForm(false); setEditing(null); }}
+          onSaved={() => { setShowForm(false); setEditing(null); onChanged(); }}
+        />
+      )}
+
+      {rules.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] p-8 text-center text-sm text-slate-400">
+          No pricing rules yet. The turf&apos;s base price applies as-is.
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {rules.map((r) => (
+            <div
+              key={r.id}
+              className="rounded-2xl border border-white/[0.06] bg-white/[0.03] p-4 transition-colors hover:border-indigo-400/30"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-sm font-semibold text-white">{r.name}</h3>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleActive(r)}
+                      disabled={togglingId === r.id}
+                      className={`rounded-full px-2 py-0.5 text-[10px] font-medium transition-opacity disabled:opacity-50 ${
+                        r.is_active
+                          ? "bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/30"
+                          : "bg-slate-500/10 text-slate-400 ring-1 ring-slate-500/30"
+                      }`}
+                    >
+                      {r.is_active ? "Active" : "Inactive"}
+                    </button>
+                    <span className="rounded-full bg-indigo-500/10 px-2 py-0.5 text-[10px] font-semibold text-indigo-300 ring-1 ring-indigo-500/30">
+                      {formatAdjustmentBadge(r)} {r.adjustment_type}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-400">{summarizeConditions(r)}</p>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Priority {r.priority}
+                    {r.stackable ? " · Stackable" : ""}
+                    {r.valid_from || r.valid_until
+                      ? ` · Valid ${r.valid_from ?? "—"} → ${r.valid_until ?? "—"}`
+                      : ""}
+                  </p>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { setEditing(r); setShowForm(false); }}
+                    className="rounded-lg border border-white/[0.06] bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-white/[0.06] hover:text-white"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(r)}
+                    className="rounded-lg border border-rose-500/20 bg-rose-500/5 px-3 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-500/10"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
+  );
+}
+
+function PricingForm({
+  turfId,
+  initial,
+  editingId,
+  onClose,
+  onSaved,
+}: {
+  turfId: string;
+  initial: PricingFormState;
+  editingId: string | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [state, setState] = useState<PricingFormState>(initial);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  function toggleDay(i: number) {
+    setState((s) => ({
+      ...s,
+      days: s.days.includes(i) ? s.days.filter((d) => d !== i) : [...s.days, i],
+    }));
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setErr(null);
+    if (!state.name.trim()) {
+      setErr("Name is required.");
+      return;
+    }
+    if (state.time_start && !state.time_end) {
+      setErr("Provide both start and end time for the time range (or leave both blank).");
+      return;
+    }
+    if (!state.time_start && state.time_end) {
+      setErr("Provide both start and end time for the time range (or leave both blank).");
+      return;
+    }
+    setSaving(true);
+    try {
+      const payload = formStateToPayload(state);
+      if (editingId) {
+        await updatePricingRule(editingId, payload);
+      } else {
+        await createPricingRule(turfId, payload);
+      }
+      onSaved();
+    } catch (e2) {
+      setErr(e2 instanceof Error ? e2.message : "Failed to save pricing rule.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const valueSuffix = state.adjustment_type === "percentage" ? "%" : "₹";
+
+  return (
+    <form
+      onSubmit={handleSubmit}
+      className="rounded-xl border border-indigo-500/30 bg-indigo-500/[0.04] p-5"
+    >
+      <div className="mb-4 flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-white">
+          {editingId ? "Edit pricing rule" : "New pricing rule"}
+        </h3>
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-xs text-slate-500 hover:text-slate-300"
+        >
+          Cancel
+        </button>
+      </div>
+
+      <Row>
+        <Field label="Name">
+          <input
+            className={INPUT}
+            value={state.name}
+            onChange={(e) => setState({ ...state, name: e.target.value })}
+            placeholder="Weekend Peak"
+          />
+        </Field>
+        <Field label="Rule type" hint='Free-form tag, e.g. "surcharge", "discount", "promo".'>
+          <input
+            className={INPUT}
+            value={state.rule_type}
+            onChange={(e) => setState({ ...state, rule_type: e.target.value })}
+          />
+        </Field>
+      </Row>
+
+      <div className="mt-4">
+        <Field label="Priority" hint="Lower numbers are applied first.">
+          <input
+            type="number"
+            className={INPUT}
+            value={state.priority}
+            onChange={(e) => setState({ ...state, priority: Number(e.target.value) })}
+          />
+        </Field>
+      </div>
+
+      <div className="mt-5">
+        <Field label="Adjustment">
+          <div className="flex items-center gap-2">
+            <div className="inline-flex rounded-lg ring-1 ring-white/[0.06]">
+              <button
+                type="button"
+                onClick={() => setState({ ...state, adjustment_type: "fixed" })}
+                className={`rounded-l-lg px-3 py-2 text-xs font-medium transition-colors ${
+                  state.adjustment_type === "fixed"
+                    ? "bg-indigo-500 text-white"
+                    : "bg-white/[0.03] text-slate-400 hover:text-white"
+                }`}
+              >
+                Fixed (₹)
+              </button>
+              <button
+                type="button"
+                onClick={() => setState({ ...state, adjustment_type: "percentage" })}
+                className={`rounded-r-lg px-3 py-2 text-xs font-medium transition-colors ${
+                  state.adjustment_type === "percentage"
+                    ? "bg-indigo-500 text-white"
+                    : "bg-white/[0.03] text-slate-400 hover:text-white"
+                }`}
+              >
+                Percentage (%)
+              </button>
+            </div>
+            <div className="relative flex-1">
+              <input
+                type="number"
+                step="any"
+                className={INPUT}
+                placeholder={state.adjustment_type === "percentage" ? "100" : "500"}
+                value={state.adjustment_value}
+                onChange={(e) => setState({ ...state, adjustment_value: e.target.value })}
+              />
+              <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500">
+                {valueSuffix}
+              </span>
+            </div>
+          </div>
+        </Field>
+      </div>
+
+      <div className="mt-5">
+        <Field label="Days of week" hint="Leave empty to apply on all days.">
+          <div className="flex flex-wrap gap-1.5">
+            {DAY_LABELS.map((d, i) => (
+              <button
+                type="button"
+                key={d}
+                onClick={() => toggleDay(i)}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                  state.days.includes(i)
+                    ? "bg-indigo-500 text-white"
+                    : "bg-white/[0.03] text-slate-400 ring-1 ring-white/[0.06] hover:bg-white/[0.06]"
+                }`}
+              >
+                {d}
+              </button>
+            ))}
+          </div>
+        </Field>
+      </div>
+
+      <Row>
+        <Field label="Time start (optional)">
+          <input
+            type="time"
+            className={INPUT}
+            value={state.time_start}
+            onChange={(e) => setState({ ...state, time_start: e.target.value })}
+          />
+        </Field>
+        <Field label="Time end (optional)">
+          <input
+            type="time"
+            className={INPUT}
+            value={state.time_end}
+            onChange={(e) => setState({ ...state, time_end: e.target.value })}
+          />
+        </Field>
+      </Row>
+
+      <Row>
+        <Field label="Booking type">
+          <select
+            className={INPUT}
+            value={state.booking_type}
+            onChange={(e) => setState({ ...state, booking_type: e.target.value })}
+          >
+            <option value="">Any</option>
+            <option value="regular">Regular</option>
+            <option value="practice">Practice</option>
+            <option value="tournament">Tournament</option>
+            <option value="event">Event</option>
+          </select>
+        </Field>
+        <Field label="Slot type">
+          <select
+            className={INPUT}
+            value={state.slot_type}
+            onChange={(e) => setState({ ...state, slot_type: e.target.value })}
+          >
+            <option value="">Any</option>
+            <option value="peak">Peak</option>
+            <option value="offpeak">Off-peak</option>
+          </select>
+        </Field>
+      </Row>
+
+      <Row>
+        <Field label="Valid from (optional)">
+          <input
+            type="date"
+            className={INPUT}
+            value={state.valid_from}
+            onChange={(e) => setState({ ...state, valid_from: e.target.value })}
+          />
+        </Field>
+        <Field label="Valid until (optional)">
+          <input
+            type="date"
+            className={INPUT}
+            value={state.valid_until}
+            onChange={(e) => setState({ ...state, valid_until: e.target.value })}
+          />
+        </Field>
+      </Row>
+
+      <div className="mt-4 flex flex-wrap items-center gap-4">
+        <label className="flex items-center gap-2 text-xs text-slate-300">
+          <input
+            type="checkbox"
+            checked={state.stackable}
+            onChange={(e) => setState({ ...state, stackable: e.target.checked })}
+            className="h-4 w-4 rounded border-white/10 bg-white/[0.03] text-indigo-500 focus:ring-indigo-500/40"
+          />
+          Stackable with other rules
+        </label>
+        <label className="flex items-center gap-2 text-xs text-slate-300">
+          <input
+            type="checkbox"
+            checked={state.is_active}
+            onChange={(e) => setState({ ...state, is_active: e.target.checked })}
+            className="h-4 w-4 rounded border-white/10 bg-white/[0.03] text-indigo-500 focus:ring-indigo-500/40"
+          />
+          Active
+        </label>
+      </div>
+
+      {err && (
+        <div className="mt-3 rounded-lg bg-rose-500/10 p-3 text-xs text-rose-300">{err}</div>
+      )}
+
+      <div className="mt-5 flex gap-3">
+        <button type="submit" disabled={saving} className={BTN_PRIMARY}>
+          {saving ? "Saving…" : editingId ? "Save changes" : "Create rule"}
+        </button>
+      </div>
+    </form>
   );
 }
 

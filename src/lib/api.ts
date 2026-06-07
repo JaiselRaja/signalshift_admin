@@ -459,6 +459,55 @@ export async function createPricingRule(turfId: string, body: Record<string, unk
   return api.post<PricingRuleRead>(`/bookings/pricing-rules/${turfId}`, body);
 }
 
+export async function listPricingRules(turfId: string): Promise<PricingRuleRead[]> {
+  return api.get<PricingRuleRead[]>(`/bookings/pricing-rules/${turfId}`);
+}
+
+export async function updatePricingRule(
+  ruleId: string,
+  body: Partial<Omit<PricingRuleRead, "id" | "turf_id">>,
+): Promise<PricingRuleRead> {
+  return api.patch<PricingRuleRead>(`/bookings/pricing-rules/${ruleId}`, body);
+}
+
+export async function deletePricingRule(ruleId: string): Promise<void> {
+  return api.delete<void>(`/bookings/pricing-rules/${ruleId}`);
+}
+
+// ─── Admin Notification Recipients ──────────────────
+
+export interface AdminRecipientRead {
+  id: string;
+  email: string;
+  label: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function listAdminRecipients(): Promise<AdminRecipientRead[]> {
+  return api.get<AdminRecipientRead[]>("/notifications/recipients");
+}
+
+export async function createAdminRecipient(body: {
+  email: string;
+  label?: string | null;
+  is_active?: boolean;
+}): Promise<AdminRecipientRead> {
+  return api.post<AdminRecipientRead>("/notifications/recipients", body);
+}
+
+export async function updateAdminRecipient(
+  id: string,
+  body: { label?: string | null; is_active?: boolean },
+): Promise<AdminRecipientRead> {
+  return api.patch<AdminRecipientRead>(`/notifications/recipients/${id}`, body);
+}
+
+export async function deleteAdminRecipient(id: string): Promise<void> {
+  return api.delete<void>(`/notifications/recipients/${id}`);
+}
+
 // ─── Plans ──────────────────────────────────────────
 
 export type PlanType = "monthly" | "daily";
